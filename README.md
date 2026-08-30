@@ -148,7 +148,11 @@ The modifier then:
   choose to wait, do something else, or escalate to a human.
 
 A request belongs to its live poster: it is removed when the poster exits or withdraws it,
-so the status view never fills with questions nobody is asking. Replies live in the
+so the status view never fills with questions nobody is asking. That ownership covers every
+copy: when a modifier of a shared root posts its request into each dependent tool that has a
+reader, it removes or marks every one of those copies on every exit path, not just the copy
+in its own tool, or a reader's status shows an open question about work that already
+finished. Replies live in the
 reader's own lease file, keyed by request id, so each file has one writer.
 
 ### Modifiers queue
@@ -160,10 +164,26 @@ requests coalesce naturally, because the second finds nothing left. Coalescing i
 and decided by that re-check, never by comparing action names, and requests on different
 tools are never compared.
 
+Exclusivity between modifiers is a second rule, separate from consultation, and it runs in
+both directions along the graph: a modifier of X is blocked by a live write lease on X, on
+anything X depends on, and on anything that depends on X. Only the negotiation with readers
+is one-way (the readers of X and of everything that depends on X). Stating the reader rule
+alone leaves a hole an implementer will faithfully reproduce: nothing would stop a reset of
+the database starting while the stack it lives in is still coming up.
+
+Refusal is a contract of the entry points, not only of the core. A refused modifier exits
+with one well-known exit code (the reference implementation uses 75) and the negotiation
+message, never a stack trace; a new entry point that forgets the handling and crashes with
+the default code is a defect, because whatever wraps the script keys its behaviour on that
+code.
+
 ### The preflight, and convergence to the union
 
 Before any use, an agent checks that the resource is in a state its checkout can work
-with. For a database that means comparing the migrations the checkout carries with the
+with. The preflight obeys the same "am I active" decision as the leases: once it can
+converge, it is the part of the layer that modifies the resource, so a participant whose
+run targets a resource elsewhere must not probe at all, and a CI runner's "one environment
+check and nothing else" must include the preflight. For a database that means comparing the migrations the checkout carries with the
 ones the resource has applied. The principle behind the outcomes: **a shared tool has one
 state, the same for every agent, and agents adapt to it rather than reset it to look like
 their own checkout.** Where the work is append-only and ordered (migrations, image tags,
@@ -186,7 +206,14 @@ The version of the resource is *derived* from what already exists (the checkout'
 migration list and the resource's own record of what was applied), never kept in a third
 place that can drift. After every modifier run the tool writes a derived `state.json`
 (what was applied, by which branch, from where, when) so a status command can show "what
-is this built from" without touching the resource. That `built_by` field is the most
+is this built from" without touching the resource. It records what the **resource** reports
+after the change, never what the participant's checkout declares: on a behind + ahead
+convergence those differ, and writing the declaration silently erases the other branch's
+work from the one file every other checkout reads. For the same reason the convergence step
+captures the underlying tool's own output instead of inheriting its stdio; the conflict
+message's entire value is the resource's own words ("column verify_code of relation receipt
+already exists"), and a wrapper that inherited stdio would have nothing to say but "command
+failed". That `built_by` field is the most
 valuable thing in the system: it is what turns "the database does not match" into "built
 by branch X in worktree Y at 17:40".
 
@@ -215,6 +242,16 @@ No agent harness or agent-to-agent protocol known to the authors has a shared-re
 lease primitive: A2A negotiates tasks between agents, MCP exposes tools, and neither says
 anything about two agents sharing one database. That gap is why this repository exists,
 and `Notifier` is where such a platform would plug in.
+
+Two adoption rules ride with the interfaces. First, the message catalogue is a sixth
+injected collaborator, not a static import: if the core imports its own wording, an adopter
+who wants another language, another tone or another command vocabulary has to fork the
+core, which defeats the reason the split exists; injected, the wording is configuration,
+and the core's own text carries no resource-specific noun. Second, every on-disk format
+carries a version field and every reader checks it, failing closed: an unknown version is
+treated exactly like an unparseable file, a live non-interruptible holder reported for a
+human to resolve. Two participants at different versions is the normal case for a
+machine-global state directory shared by checkouts of different ages.
 
 ## Every case, with "light and flexible" applied
 
@@ -288,15 +325,36 @@ implementation's HLD/LLD, where most of the refinements below were made, is in
 14. The pattern is five interfaces with implementations, so operating systems, harnesses
     and agent platforms can each supply their own adapters.
 
+Decisions 15 to 21 were added after building and reviewing the first implementation
+(2026-08-30); they are the places the pattern, not that codebase, was under-specified.
+
+15. Exclusivity between modifiers runs in both directions along the graph (a modifier of X
+    is blocked by a write lease on X, on its dependencies, and on its dependents); only
+    consultation with readers runs one way.
+16. The preflight is gated by the same "am I active" decision as the leases, because once
+    it can converge it is itself a modifier.
+17. The message catalogue is injected into the core as a sixth collaborator, and the
+    core's own text carries no resource-specific nouns or commands.
+18. On-disk format versions are checked on every read and fail closed, exactly like a
+    corrupt file: reported, never silently misread.
+19. The convergence step captures the underlying tool's own error text rather than
+    inheriting its stdio, and the derived state records what the resource reports, never
+    what the participant declares.
+20. A request copied into dependent tools belongs to the poster in every copy, and the
+    poster clears all of them on every exit path.
+21. A refused modifier exits with one well-known code and the negotiation message, never a
+    stack; the exit code is a contract of every entry point, not only of the core.
+
 ## Status
 
-**First implementation in progress**, as the test bed, in a Node/TypeScript project with a
-local Supabase shared by coding agents in git worktrees (three tools: the container
+**First implementation built and reviewed**, as the test bed, in a Node/TypeScript project
+with a local Supabase shared by coding agents in git worktrees (three tools: the container
 runtime, the project's stack, the project's database). Its HLD and LLD were reviewed on
-2026-08-30 and the findings from that review are already folded into this README. When the
-implementation ships, its generic core (leases, requests, graph, queue, preflight) is the
-candidate reference implementation for this repository, and the remaining findings from
-building and running it will be added here.
+2026-08-30, the build was reviewed twice against the LLD with every finding fixed and
+proven in real processes, and the lessons only the build surfaced are folded into this
+README as decisions 15 to 21. Its generic core (leases, requests, graph, FIFO queue,
+preflight, injected messages) is the candidate reference implementation for this
+repository.
 
 Open questions, in the order they need answering:
 
