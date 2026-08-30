@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#69 design v2: leases, negotiation and a schema preflight for the shared local Supabase</title>
+<style>
+  :root {
+    --maroon-50:#fbf3f1; --maroon-100:#f5e2dd; --maroon-300:#d49a8c; --maroon-700:#6e2c22;
+    --saffron-300:#e8b75c; --saffron-400:#d99b33; --saffron-500:#c08324;
+    --sand-0:#ffffff; --sand-25:#fdfbf7; --sand-50:#f8f4ec; --sand-100:#f1eade; --sand-200:#e5dbca;
+    --sand-300:#d2c5af; --sand-600:#6b5d4f; --sand-900:#241d18;
+    --ink-900:#17120f; --ink-800:#201a16; --ink-700:#2b231d; --ink-600:#3b3028; --ink-400:#7a6857;
+    --teal-700:#14634a; --teal-300:#4fb98c; --red-700:#c62828; --red-300:#f1867f;
+    --green-700:#1b6b4c; --green-300:#5fc79b; --amber-800:#8a5a00; --amber-300:#e0ae4e;
+    --blue-700:#2a5c8a; --blue-300:#7fb0dc;
+    --red-soft:#fbeded; --red-soft-border:#f0c9c9; --red-soft-text:#8c1d1d;
+    --green-soft:#dcf0e6; --green-soft-border:#b6dec8; --green-soft-text:#14522f;
+    --blue-soft:#edf4fa; --blue-soft-border:#cde0ef; --blue-soft-text:#1e4869;
+    --amber-soft:#faf0d9; --amber-soft-border:#ecd9a8; --amber-soft-text:#6b4600;
+    --bg:var(--sand-25); --surface:var(--sand-0); --surface-sunken:var(--sand-50);
+    --text:var(--sand-900); --text-muted:var(--sand-600);
+    --border:var(--sand-200); --border-strong:var(--sand-300);
+    --primary:var(--maroon-700); --primary-soft:var(--maroon-50);
+    --money:var(--teal-700); --danger:var(--red-700); --success:var(--green-700);
+    --warning:var(--amber-800); --info:var(--blue-700);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:var(--ink-900); --surface:var(--ink-800); --surface-sunken:var(--ink-700);
+      --text:var(--sand-50); --text-muted:#b7a996;
+      --border:var(--ink-600); --border-strong:var(--ink-400);
+      --primary:var(--maroon-300); --primary-soft:#3a221c;
+      --money:var(--teal-300); --danger:var(--red-300); --success:var(--green-300);
+      --warning:var(--amber-300); --info:var(--blue-300);
+      --red-soft:#3a1f1d; --red-soft-border:#5c322e; --red-soft-text:#f1b0aa;
+      --green-soft:#1b3328; --green-soft-border:#2c5240; --green-soft-text:#8fd8b4;
+      --blue-soft:#1c2c3a; --blue-soft-border:#2e4a63; --blue-soft-text:#a8cbe8;
+      --amber-soft:#38290e; --amber-soft-border:#5c4718; --amber-soft-text:#eccb84;
+    }
+  }
+  *,*::before,*::after{box-sizing:border-box}
+  :where(.grid,.flex,.cols)>*{min-width:0}
+  :where(p,h1,h2,h3,h4,li,dd,td,th,.chip){overflow-wrap:anywhere}
+  :where(img,svg,video,canvas){max-width:100%;height:auto}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans",sans-serif;}
+  main{max-width:980px;margin:0 auto;padding:24px 20px 96px}
+  h1{font-size:1.65rem;line-height:1.3;margin:.2em 0 .3em}
+  h2{font-size:1.25rem;margin:2.2em 0 .5em;padding-top:1em;border-top:1px solid var(--border)}
+  h3{font-size:1.05rem;margin:1.4em 0 .4em}
+  p{margin:.5em 0}
+  code{background:var(--surface-sunken);border:1px solid var(--border);border-radius:4px;
+    padding:.05em .3em;font-size:.85em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  pre{background:var(--surface-sunken);border:1px solid var(--border);border-radius:8px;
+    padding:12px 14px;overflow-x:auto;font-size:.82rem;line-height:1.5;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  pre code{background:none;border:0;padding:0;font-size:inherit}
+  .lede{color:var(--text-muted);font-size:1.02rem}
+  .chip{display:inline-block;border-radius:999px;padding:.1em .7em;font-size:.78rem;font-weight:600;
+    border:1px solid var(--border-strong);background:var(--surface-sunken);vertical-align:middle}
+  .chip.danger{background:var(--red-soft);border-color:var(--red-soft-border);color:var(--red-soft-text)}
+  .chip.ok{background:var(--green-soft);border-color:var(--green-soft-border);color:var(--green-soft-text)}
+  .chip.info{background:var(--blue-soft);border-color:var(--blue-soft-border);color:var(--blue-soft-text)}
+  .chip.warn{background:var(--amber-soft);border-color:var(--amber-soft-border);color:var(--amber-soft-text)}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin:12px 0}
+  .card h3{margin-top:0}
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+  .notice{border-radius:10px;padding:12px 14px;margin:12px 0;border:1px solid}
+  .notice.danger{background:var(--red-soft);border-color:var(--red-soft-border);color:var(--red-soft-text)}
+  .notice.info{background:var(--blue-soft);border-color:var(--blue-soft-border);color:var(--blue-soft-text)}
+  .notice.warn{background:var(--amber-soft);border-color:var(--amber-soft-border);color:var(--amber-soft-text)}
+  .notice.ok{background:var(--green-soft);border-color:var(--green-soft-border);color:var(--green-soft-text)}
+  table{border-collapse:collapse;width:100%;font-size:.93rem}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--text-muted);font-weight:600;font-size:.8rem;text-transform:uppercase;letter-spacing:.03em}
+  .tablewrap{overflow-x:auto}
+  figure{margin:16px 0}
+  figcaption{color:var(--text-muted);font-size:.9rem;margin-top:6px}
+  svg text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .term{background:var(--ink-900);color:var(--sand-50);border-radius:10px;padding:14px 16px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.84rem;line-height:1.55;overflow-x:auto;margin:10px 0}
+  .term .red{color:var(--red-300)} .term .dim{color:#b7a996} .term .amber{color:var(--amber-300)} .term .green{color:var(--green-300)} .term .blue{color:var(--blue-300)}
+  fieldset{border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin:12px 0;background:var(--surface)}
+  legend{font-weight:600;padding:0 6px}
+  label{display:block;padding:6px 0;cursor:pointer}
+  label input{margin-right:8px}
+  textarea{width:100%;min-height:64px;border:1px solid var(--border-strong);border-radius:8px;padding:8px;font:inherit;background:var(--surface)}
+  button{font:inherit;border-radius:8px;border:1px solid var(--primary);background:var(--primary);color:#fff;
+    padding:8px 14px;cursor:pointer;margin-top:8px}
+  .queued{font-size:.85rem;color:var(--success);margin-left:8px}
+  .kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;font-size:.93rem}
+  .kv dt{color:var(--text-muted)} .kv dd{margin:0}
+  .changed{border-left:4px solid var(--accent, #d99b33);padding-left:12px}
+</style>
+</head>
+<body>
+<main>
+<p><span class="chip">#69</span> <span class="chip">technical</span> <span class="chip">chore</span> <span class="chip info">design v2, after founder feedback</span></p>
+<h1>Leases, negotiation and a schema preflight for the shared local Supabase</h1>
+<p class="lede">Version 2. Three things changed from v1, all from your feedback: (1) using the database is not the problem,
+<strong>changing</strong> it is, so readers run concurrently and only modifiers have to ask; (2) every database user checks the
+schema it is about to run against, before it starts; (3) nothing here is a daemon, a queue or a scheduler, and the
+happy path costs one file write and one SQL query. Sections marked with the saffron bar are the changed ones.</p>
+
+<h2 id="model">1. The model: readers coexist, modifiers ask</h2>
+<div class="cols changed">
+  <div class="card">
+    <h3>Readers <span class="chip ok">concurrent</span></h3>
+    <p>Use the database as an application user. They never change its shape or restart it.</p>
+    <ul>
+      <li>A Playwright run (api or ui), including the no-mistakes gate's test step</li>
+      <li>A human or agent in psql or the Studio, seeding a demo, poking at rows</li>
+      <li>The dev server (<code>npm run dev</code>)</li>
+    </ul>
+    <p>Any number of readers at once. Each holds a <strong>read lease</strong> that says who, from where, since when, and how long they expect to need it.</p>
+  </div>
+  <div class="card">
+    <h3>Modifiers <span class="chip warn">must ask</span></h3>
+    <p>Change the database's shape or availability for everyone.</p>
+    <ul>
+      <li><code>db:reset</code> (drops everything)</li>
+      <li><code>db:start</code>, <code>db:stop</code>, a Docker restart</li>
+      <li><code>migration up</code> on a branch whose migrations differ</li>
+      <li><code>check:migration-against-tenant</code> (destroys and rebuilds)</li>
+    </ul>
+    <p>A modifier needs a <strong>write lease</strong>, which it can only take when no live read lease objects. If readers are active, it posts a <strong>request</strong> and they get a say.</p>
+  </div>
+</div>
+
+<h2 id="negotiation">2. How a modifier asks, and how readers answer</h2>
+<div class="changed">
+<p>This is the part you asked for: a modifier tells the other agents what it wants and how long, and they can respond if they care.</p>
+<figure>
+<svg viewBox="0 0 900 330" width="100%" role="img" aria-labelledby="neg-title" style="color:var(--text)">
+  <title id="neg-title">A modifier posts a request; readers respond with ok or need more time; the modifier waits or proceeds</title>
+  <defs><marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor" /></marker></defs>
+  <!-- lanes -->
+  <g font-size="13" font-weight="700" fill="currentColor">
+    <text x="90" y="28" text-anchor="middle">modifier (tab 2)</text>
+    <text x="450" y="28" text-anchor="middle">shared state dir</text>
+    <text x="810" y="28" text-anchor="middle">reader (gate's e2e run)</text>
+  </g>
+  <g stroke="var(--border-strong)" stroke-dasharray="4 4">
+    <line x1="90" y1="40" x2="90" y2="320" /><line x1="450" y1="40" x2="450" y2="320" /><line x1="810" y1="40" x2="810" y2="320" />
+  </g>
+  <!-- step 1 -->
+  <g id="s1">
+    <path d="M100 70 L440 70" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow2)" />
+    <text x="270" y="62" text-anchor="middle" font-size="11.5" fill="currentColor">1. wants db:reset, sees a live read lease</text>
+    <rect x="360" y="82" width="180" height="46" rx="8" fill="var(--amber-soft)" stroke="var(--amber-soft-border)" />
+    <text x="450" y="101" text-anchor="middle" font-size="11.5" fill="var(--amber-soft-text)">requests/r-3f2.json</text>
+    <text x="450" y="118" text-anchor="middle" font-size="11" fill="var(--amber-soft-text)">reset, needs ~2 min, by 87-branch</text>
+  </g>
+  <!-- step 2 notify -->
+  <g id="s2">
+    <path d="M540 105 L800 105" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow2)" />
+    <text x="670" y="97" text-anchor="middle" font-size="11.5" fill="currentColor">2. notified: desktop banner, status, watch</text>
+  </g>
+  <!-- step 3 respond -->
+  <g id="s3">
+    <path d="M800 160 L460 160" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow2)" />
+    <text x="630" y="152" text-anchor="middle" font-size="11.5" fill="currentColor">3. answers within the grace window, or stays silent</text>
+    <rect x="360" y="172" width="180" height="46" rx="8" fill="var(--blue-soft)" stroke="var(--blue-soft-border)" />
+    <text x="450" y="191" text-anchor="middle" font-size="11.5" fill="var(--blue-soft-text)">r-3f2 reply: need 4 min</text>
+    <text x="450" y="208" text-anchor="middle" font-size="11" fill="var(--blue-soft-text)">or: ok, go ahead</text>
+  </g>
+  <!-- step 4 -->
+  <g id="s4">
+    <path d="M440 195 L100 195" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow2)" />
+    <text x="270" y="187" text-anchor="middle" font-size="11.5" fill="currentColor">4. reads the answer</text>
+    <rect x="10" y="225" width="200" height="88" rx="8" fill="var(--surface)" stroke="var(--border-strong)" />
+    <text x="110" y="246" text-anchor="middle" font-size="11.5" font-weight="600" fill="currentColor">modifier then:</text>
+    <text x="110" y="264" text-anchor="middle" font-size="11" fill="var(--text-muted)">ok from all: proceeds now</text>
+    <text x="110" y="280" text-anchor="middle" font-size="11" fill="var(--text-muted)">need N: waits, or exits 75 with ETA</text>
+    <text x="110" y="296" text-anchor="middle" font-size="11" fill="var(--text-muted)">silence: waits until lease ETA</text>
+  </g>
+  <!-- reader lease box -->
+  <g id="lease">
+    <rect x="700" y="225" width="200" height="88" rx="8" fill="var(--green-soft)" stroke="var(--green-soft-border)" />
+    <text x="800" y="246" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--green-soft-text)">leases/66202.json</text>
+    <text x="800" y="264" text-anchor="middle" font-size="11" fill="var(--green-soft-text)">read, e2e, since 17:41</text>
+    <text x="800" y="280" text-anchor="middle" font-size="11" fill="var(--green-soft-text)">expected_until 17:47</text>
+    <text x="800" y="296" text-anchor="middle" font-size="11" fill="var(--green-soft-text)">interruptible: false</text>
+  </g>
+</svg>
+<figcaption>No daemon: the "shared state dir" is a directory of small JSON files under <code>~/.local/state/dblease/hybrid-donation/</code>. Notification is
+a macOS desktop banner (<code>osascript</code>), the request showing up in <code>npm run db:lease status</code>, and an optional
+<code>npm run db:lease watch</code> that prints requests as they arrive (an agent can sit on it with its Monitor tool).</figcaption>
+</figure>
+
+<h3>The three answers a reader can give</h3>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Answer</th><th>Command</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><span class="chip ok">ok</span></td><td><code>npm run db:lease respond r-3f2 --ok</code></td><td>Go ahead now. I am done, or my run can be sacrificed (the agent re-runs it later).</td></tr>
+    <tr><td><span class="chip info">need N</span></td><td><code>npm run db:lease respond r-3f2 --need 4m</code></td><td>Wait; I need about four more minutes. Updates my lease's <code>expected_until</code>.</td></tr>
+    <tr><td><span class="chip">silence</span></td><td>nothing</td><td>The modifier falls back to my lease's <code>expected_until</code>. A Playwright run cannot answer for itself, so its lease carries an honest estimate (measured: about 6 minutes for the full suite) and <code>interruptible: false</code>.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>What the modifier does with the answers</h3>
+<ul>
+  <li><strong>Every live reader said ok</strong> (or every read lease is stale): takes the write lease, proceeds.</li>
+  <li><strong>Someone needs time</strong>: prints who and until when. With <code>--wait</code> it polls until all read leases are gone or answered ok, then proceeds. Without, exits 75 (<code>EX_TEMPFAIL</code>) with the ETA so the calling agent can decide.</li>
+  <li><strong>Silence past the grace window</strong> (default 20 s): same as "need time until <code>expected_until</code>". If <code>expected_until</code> has passed and the pid is still alive, the reader has overrun; the modifier says so and keeps waiting under <code>--wait</code>, or the human uses <code>--force</code>.</li>
+</ul>
+<div class="notice info">Readers never wait for anything except a write lease that is <em>already active</em> (a reset in progress). A new reader arriving during a reset is told "database is being reset by X, about 90 s left" and can <code>--wait</code>. That is the only case a reader is ever held.</div>
+</div>
+
+<h3 class="changed">Two scopes, from your note</h3>
+<div class="changed">
+<p>Docker and the Supabase stack as a whole are a <strong>laptop-level</strong> resource: a Docker restart touches every project's
+containers. A schema change is <strong>project-level</strong>: another repo's database does not care that this one was reset.
+So the state dir has two levels and every lease and request carries a scope:</p>
+<pre><code>~/.local/state/dblease/
+  _machine/                 scope: machine   (docker restart, "stop everything")
+    leases/  requests/
+  hybrid-donation/          scope: project   keyed by supabase project_id
+    leases/  requests/  schema.json
+  some-other-repo/          a second project, when one exists</code></pre>
+<ul>
+  <li>A <strong>project-scope</strong> modifier (<code>db:reset</code>, <code>db:migrate</code>, <code>db:start</code>/<code>db:stop</code> for this project) consults only this project's read leases.</li>
+  <li>A <strong>machine-scope</strong> modifier (a Docker restart, or a future "stop all Supabase projects") consults every project's read leases, and posts its request in each project's <code>requests/</code> so each project's readers are told through their own channel.</li>
+  <li>Readers always register under their project. A reader in another repo is invisible to this project's modifiers, which is the point.</li>
+</ul>
+<div class="notice info">The tool itself starts life in this repo (<code>scripts/lib/db-lease.mjs</code>), with the directory layout and JSON format designed for the two scopes from day one. Extracting it to a shared CLI under <code>~/.local/bin</code>, next to <code>treehouse</code> and <code>no-mistakes</code>, is a later step for when a second repo needs it; nothing about the layout has to change then.</div>
+</div>
+
+<h2 id="schema">3. The schema preflight</h2>
+<div class="changed">
+<p>Your second point: an agent should know whether the database's schema matches the checkout it is about to test, before it starts.</p>
+<div class="cols">
+  <div class="card">
+    <h3>The version already exists in two places</h3>
+    <p><strong>In the repo:</strong> <code>supabase/migrations/</code>. The sorted list of filenames <em>is</em> the schema version of a checkout; each branch has its own.</p>
+    <p><strong>In the database:</strong> <code>supabase_migrations.schema_migrations</code>, which the Supabase CLI maintains: one row per applied migration version.</p>
+    <p>So the preflight is one query compared with one directory listing. Nothing new has to be written or kept in sync, which is why I recommend against a separate committed version file: it would be a third copy that can drift from the other two.</p>
+  </div>
+  <div class="card">
+    <h3>Also written to the shared state dir</h3>
+    <p>After every modifier run, the tool writes <code>schema.json</code>: the applied set, the branch and worktree that applied it, and when. That is the human-readable "what is the database currently built from" you asked for, visible in <code>db:lease status</code> without a query, and it is derived, so it cannot drift.</p>
+  </div>
+</div>
+
+<h3>Four outcomes, and what each does</h3>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Database vs my checkout</th><th>Outcome</th><th>Reader (e2e) does</th><th>Cost</th></tr></thead>
+  <tbody>
+    <tr><td>Same set</td><td><span class="chip ok">match</span></td><td>proceeds</td><td>one query, ~50 ms</td></tr>
+    <tr><td>Database is missing some of mine (I have newer migrations)</td><td><span class="chip info">behind</span></td><td>says so and stops: applying migrations is a modifier action. The agent runs <code>npm run db:migrate</code>, which takes a write lease through the negotiation above and applies only the missing ones (non-destructive)</td><td>one query</td></tr>
+    <tr><td>Database has migrations I do not have (another branch applied theirs)</td><td><span class="chip warn">foreign</span></td><td>says which branch built it and stops: running my suite against a foreign schema is the flaky-test trap #69 describes. The agent needs <code>db:reset</code> (negotiated) or to wait for that branch to finish. <code>--allow-foreign</code> exists for the rare case the extra migrations are known-harmless</td><td>one query</td></tr>
+    <tr><td>Database is empty or absent</td><td><span class="chip danger">none</span></td><td>says so; <code>db:start</code> is the modifier action</td><td>one query</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="term">
+<span class="dim">$</span> npx playwright test<br>
+<span class="amber">Schema preflight: the local database was built from a different branch.</span><br>
+<br>
+&nbsp;&nbsp;database has&nbsp;&nbsp;&nbsp;30 migrations, head 20260822090100_donation_correction_rpcs<br>
+&nbsp;&nbsp;this checkout&nbsp;&nbsp;29 migrations, head 20260818090100_receipt_rpcs, plus 1 the database lacks<br>
+&nbsp;&nbsp;built by&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;87-a-mis-recorded-cash-amount… from ~/.no-mistakes/worktrees/0b48… at 17:39<br>
+<br>
+<span class="dim">Your suite would run against a schema it was not written for. Options:</span><br>
+<span class="dim">&nbsp;&nbsp;npm run db:reset --wait&nbsp;&nbsp;&nbsp;&nbsp;rebuild from this checkout (asks the 1 active reader first)</span><br>
+<span class="dim">&nbsp;&nbsp;npm run db:lease status&nbsp;&nbsp;&nbsp;&nbsp;see who is using it and for how long</span>
+</div>
+</div>
+
+<h2 id="cases">4. Every case I could think of, with the light-and-flexible test applied</h2>
+<div class="changed">
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Case</th><th>What happens</th><th>Blocks anyone?</th></tr></thead>
+  <tbody>
+    <tr><td>Two tabs both run the E2E suite, same schema</td><td>Two read leases, both run. Fixtures are per-test charities, so they do not collide on data.</td><td>No. Caveat below on auth rate limits.</td></tr>
+    <tr><td>Tab 2 runs E2E while the gate's test step is running</td><td>Same as above. This is the #87-today case.</td><td>No</td></tr>
+    <tr><td>Tab 2 wants <code>db:reset</code> while the gate is testing</td><td>Request posted, banner shown, gate's lease says "e2e, ~4 min left, not interruptible". Tab 2 waits (with <code>--wait</code>) or exits 75 with the ETA.</td><td>The modifier, for at most the reader's ETA. Exactly the case that used to corrupt the run.</td></tr>
+    <tr><td>Tab 2 wants to run E2E on a branch with different migrations</td><td>Preflight: <code>foreign</code>. Clear message naming the other branch. Agent chooses reset (negotiated) or waits.</td><td>Tab 2, by its own choice, instead of failing mysteriously</td></tr>
+    <tr><td>Tab 2 has one new migration the database lacks</td><td>Preflight: <code>behind</code>. <code>db:migrate</code> applies the missing one after asking readers (non-destructive, usually instant consent).</td><td>Briefly, the modifier</td></tr>
+    <tr><td>A reader arrives during a reset</td><td>Told who is resetting and ETA (~90 s); <code>--wait</code> polls.</td><td>The reader, for the reset's duration. Unavoidable and honest.</td></tr>
+    <tr><td>An agent is killed mid-run, its lease file remains</td><td>Every check does <code>kill(pid, 0)</code>; a dead pid's lease is ignored and cleaned up by the next command.</td><td>No</td></tr>
+    <tr><td>The laptop sleeps</td><td>Pids survive sleep. Leases are still valid on wake; <code>expected_until</code> may have passed, which only affects modifiers' wait estimate.</td><td>No</td></tr>
+    <tr><td>Human runs bare <code>npx supabase db reset</code></td><td>Bypasses everything. Documented; the npm scripts are the entry points. Not worth wrapping the Supabase CLI.</td><td>n/a</td></tr>
+    <tr><td>Docker itself is restarted</td><td><code>db:stop</code> / <code>db:start</code> are modifiers. A raw Docker Desktop restart bypasses, same as the row above.</td><td>n/a</td></tr>
+    <tr><td>CI (GitHub runner)</td><td>Fresh runner, no leases, no other users. The tool sees an empty state dir and does nothing. Zero cost.</td><td>No</td></tr>
+    <tr><td>The gate's test agent hits <code>foreign</code></td><td>Today it improvises a <code>db:reset</code> silently (we saw it populate <code>.env.local</code> from <code>supabase status</code>). With this, it gets the same clear message and can run <code>db:reset --wait</code>, which negotiates like anyone else. The gate's Sonnet has Bash; nothing gate-specific to configure.</td><td>Only if a reader objects</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="notice warn"><strong>The one real risk of concurrent readers.</strong> GoTrue rate-limits sign-ins per IP. Two suites at once double the sign-in rate, and the auth backoff spec (<code>members-auth-backoff.spec.ts</code>) is timing-sensitive; it flaked once today on a cold stack. If two-suite runs prove flaky in practice, the fix is <code>playwright test --exclusive</code> (a write-style lease for one run), not a return to the global lock. Start permissive, tighten on evidence.</div>
+</div>
+
+<h2 id="files">5. What gets built</h2>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>File</th><th>Change</th></tr></thead>
+  <tbody>
+    <tr><td><code>scripts/lib/db-lease.mjs</code> <span class="chip ok">new</span></td><td>read/write leases, requests and replies, stale detection, exit and signal handlers, the messages. Pure Node, no dependencies, no daemon.</td></tr>
+    <tr><td><code>scripts/lib/db-schema.mjs</code> <span class="chip ok">new</span></td><td>the preflight: query <code>schema_migrations</code>, compare with <code>supabase/migrations/</code>, classify match / behind / foreign / none, write <code>schema.json</code> after modifier runs.</td></tr>
+    <tr><td><code>scripts/db-lease.mjs</code> <span class="chip ok">new</span></td><td>CLI: <code>status</code>, <code>hold "reason" [--for 30m]</code>, <code>respond &lt;id&gt; --ok | --need 4m</code>, <code>watch</code>, <code>release [--force]</code>. Wired as <code>npm run db:lease</code>.</td></tr>
+    <tr><td><code>scripts/db-migrate.mjs</code> <span class="chip ok">new</span></td><td><code>npm run db:migrate</code>: apply only the missing migrations under a write lease. Today there is no non-destructive path at all; agents reach for <code>db:reset</code>.</td></tr>
+    <tr><td><code>scripts/lib/local-db.mjs</code>, <code>db-reset-local.mjs</code>, <code>check-migration-against-tenant.mjs</code>, <code>package.json</code> (<code>db:stop</code>)</td><td>wrap in <code>withWriteLease(purpose, estimate, fn)</code>; write <code>schema.json</code> afterwards.</td></tr>
+    <tr><td><code>playwright.config.ts</code> + two small files in <code>e2e/</code></td><td><code>globalSetup</code>: preflight, then take a read lease with the measured estimate; <code>globalTeardown</code>: release.</td></tr>
+    <tr><td><code>AGENTS.md</code>, <code>README.md</code></td><td>#69's "by discipline" rules replaced by the model in section 1 and the four preflight outcomes; the firstmate crew rules shrink to "readers run, modifiers ask".</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="testing">6. Testing</h2>
+<ul>
+  <li><strong>Unit</strong> (vitest, 100% of the two lib modules, temp dirs, fake pids): concurrent read leases; write refused by a live read; write granted when all replied ok; write granted when read is stale; <code>need N</code> extends the ETA; grace-window expiry; release only with matching token; classification of all four schema outcomes from fixture lists.</li>
+  <li><strong>Process-level</strong>: spawn a <code>hold</code> child, run a modifier against the same temp state dir, assert it posts a request and exits 75 with the child's details; then respond <code>--ok</code> from a third process and assert it proceeds.</li>
+  <li><strong>Playwright wiring</strong>: the full suite green under the new <code>globalSetup</code>/<code>globalTeardown</code>, lease file gone afterwards, plus a deliberate <code>foreign</code> run (a throwaway migration in a temp copy) asserting the preflight message.</li>
+</ul>
+
+<h2 id="risks">7. Risks and limits</h2>
+<div class="cols">
+  <div class="notice warn"><strong>Consent is advisory for silent readers.</strong> A Playwright run cannot answer; its estimate stands in for it. If a run overruns badly, a modifier under <code>--wait</code> keeps waiting, and a human can <code>--force</code>. That is the right default for a shared resource.</div>
+  <div class="notice warn"><strong>Not a queue.</strong> Two modifiers waiting on the same readers race when the leases clear. Fine for one machine and a handful of sessions.</div>
+  <div class="notice warn"><strong>Wrong-pid takeover.</strong> A dead holder's pid reused by an unrelated process keeps a lease looking live until that process exits. Rare on macOS; <code>release --force</code> covers it.</div>
+  <div class="notice info"><strong>Still not isolation.</strong> This coordinates access; it does not give two branches two databases. If genuine parallel schema work is ever needed, #69's per-worktree Supabase project option remains, and the leases stay useful as the default.</div>
+</div>
+
+<h2 id="distribution-v3" class="changed">8. Sharing the pattern with other people (your question, second pass)</h2>
+<div class="changed">
+<p>You are right, and I answered the wrong question. An npm package only reaches people whose project already uses npm. The way
+<code>lavish</code>, <code>treehouse</code> and <code>no-mistakes</code> are shared is the right model, and it is how CLI tools that carry a
+pattern are generally shared: <strong>one static binary per OS, an install one-liner, and a README that teaches the pattern</strong>, so a
+Python, Go or Rails project on Windows, Linux or a cloud runner can adopt it with no runtime to install.</p>
+<div class="cols">
+  <div class="card">
+    <h3>The tool: <code>dblease</code>, a static binary</h3>
+    <ul>
+      <li>Own public repo, MIT. Built with the same toolchain as <code>treehouse</code> and <code>no-mistakes</code>, which are both Go binaries (go 1.25, checked on this machine): one self-contained executable, nothing to install first.</li>
+      <li>Releases on GitHub for macOS (arm64, x64), Linux (x64, arm64) and Windows (x64). Install: <code>curl -fsSL …/install.sh | sh</code> on macOS and Linux, <code>irm …/install.ps1 | iex</code> on Windows; a Homebrew tap and <code>winget</code> later if people ask.</li>
+      <li>Cross-platform details handled inside the binary: state dir (<code>~/.local/state</code> on macOS/Linux, <code>%LOCALAPPDATA%</code> on Windows), desktop notification (<code>osascript</code>, <code>notify-send</code>, Windows toast), pid liveness on each OS.</li>
+      <li>Language-agnostic: the schema probe is configured, not hard-coded. <code>dblease.toml</code> in the project root names the project id, the migrations directory, and the command that prints the database's applied versions. Supabase comes with a built-in probe; Prisma, Flyway, Alembic or plain SQL get a one-line command in the config.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>The pattern: taught, not just implemented</h3>
+    <ul>
+      <li>The README explains the model in plain language: readers coexist, modifiers ask, silence is not consent, the four preflight outcomes, two scopes. Someone can read it and adopt the pattern by hand without the tool.</li>
+      <li><code>SKILL.md</code> lives in the same repo: plain markdown any agent harness can load. Claude Code users install it with <code>npx skills add sundeepdev/dblease</code>; others copy the file. It teaches an agent when to run <code>dblease status</code>, how to answer a request, what exit 75 means.</li>
+      <li><code>dblease init</code> writes the config and, when it detects the project type, the wiring: a Playwright <code>globalSetup</code> stub for Node projects, a <code>conftest.py</code> hook for pytest, a Makefile target otherwise. That is the "shell command that sets the pattern up" you asked for.</li>
+    </ul>
+  </div>
+</div>
+<div class="notice info"><strong>What this repo then contains.</strong> Almost nothing: <code>dblease.toml</code>, <code>db:lease</code> and <code>db:migrate</code> script entries that shell out to the binary, two tiny Playwright hook files that do the same, and the AGENTS.md rules. The <code>project-template</code> gets the same four things plus one line in its AGENTS.md, so every new project inherits the pattern. <code>~/.claude/CLAUDE.md</code> gets one line under Workflow conventions pointing at the skill.</div>
+<div class="notice warn"><strong>Cost, honestly.</strong> A Go binary with releases and an installer is a bigger first step than scripts in this repo: roughly the shape of <code>treehouse</code>. By your rule on implementation cost that is the right call, because the other shapes reach fewer people or drift. The build order stays: tab 2 builds <code>dblease</code> first (binary, tests, README, SKILL.md, installer), then wires this repo for #69 and the template.</div>
+</div>
+
+<form data-lavish-question="sharing" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('q'); const n=event.currentTarget.querySelector('textarea').value.trim(); if(!c)return; window.lavish.queuePrompt('Sharing shape decision: '+c+(n?'. Notes: '+n:''), {tag:'choice', text:'Sharing: '+c, element:event.currentTarget, data:{question:'sharing', answer:c, notes:n}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+  <fieldset>
+    <legend>How the pattern is shared</legend>
+    <label><input type="radio" name="q" value="static binary per OS with install one-liner, README teaches the pattern, SKILL.md in the same repo, dblease init writes the per-project wiring (recommended)"> Static binary per OS (macOS, Linux, Windows) with an install one-liner; README teaches the pattern; SKILL.md in the same repo; <code>dblease init</code> writes the per-project wiring (recommended: the treehouse / no-mistakes shape)</label>
+    <label><input type="radio" name="q" value="static binary and README only, no skill and no init command"> Static binary and README only; no skill, no <code>init</code> (smaller; agents and projects wire it by hand)</label>
+    <label><input type="radio" name="q" value="pattern as documentation and a skill only, each project implements its own scripts"> The pattern as documentation and a skill only; each project implements its own scripts (nothing to install, but every project re-implements and drifts)</label>
+    <textarea placeholder="Repo name, licence, language, or anything else (optional)"></textarea>
+    <button type="submit">Queue answer</button><span class="queued"></span>
+  </fieldset>
+</form>
+
+<h2 id="distribution" class="changed">8a. Superseded first answer (kept so the thread reads in order)</h2>
+<div class="changed">
+<p>You asked whether this should be a skill or a design that other laptops, other people and cloud setups can use. My answer:
+<strong>both, in three layers</strong>, because each layer has a different audience and a different reason to change.</p>
+<div class="cols">
+  <div class="card">
+    <h3>1. The tool: <code>dblease</code></h3>
+    <p>Its own repo, <code>~/ws/dblease</code> (<code>sundeepdev/dblease</code>), the same shape as <code>treehouse</code>. Pure Node, zero dependencies, published as an npm package.</p>
+    <p>A project consumes it as a <strong>devDependency</strong>, so <code>npm ci</code> on any laptop or cloud runner installs it; no global install to forget. Humans may also install it globally for <code>dblease status</code> from anywhere.</p>
+    <p>Per-project config lives in the repo (<code>dblease.config.json</code>): project id, migrations dir, DB URL, purposes and their estimates. The two-scope layout is built in.</p>
+  </div>
+  <div class="card">
+    <h3>2. The skill: <code>~/.claude/skills/dblease/</code></h3>
+    <p>Teaches an agent <em>when</em> and <em>how</em>: preflight before any database use, read <code>status</code>, answer requests, <code>hold</code> for ad-hoc work, what exit 75 means. Loads only when the task touches a shared database, per your memory discipline (conditional knowledge goes in a skill, not CLAUDE.md).</p>
+    <p>Managed with <code>npx skills</code>, so it syncs to another laptop and can be shared with others. The same SKILL.md ships inside the tool's repo, so anyone who installs the package can install the skill.</p>
+  </div>
+  <div class="card">
+    <h3>3. Pointers, one line each</h3>
+    <ul>
+      <li><code>~/.claude/CLAUDE.md</code>, Workflow conventions: "shared local databases are coordinated through <code>dblease</code>; see the skill".</li>
+      <li><code>hybrid-donation/AGENTS.md</code>: #69's discipline rules replaced by "readers run, modifiers ask" and the four preflight outcomes; firstmate crew rules shrink accordingly.</li>
+      <li><code>~/ws/project-template</code>: <code>AGENTS.md</code> line, the devDependency, the <code>db:lease</code> script entries and the Playwright hook stubs, so every new project inherits it.</li>
+      <li><code>firstmate</code> dispatch brief: readers and modifiers named, so a crew never needs the old serial rule.</li>
+    </ul>
+  </div>
+</div>
+<div class="notice info"><strong>Why not "just a skill".</strong> A skill can only tell an agent what to do; it cannot make the gate's Sonnet, a Playwright <code>globalSetup</code>, or a CI runner do anything. The behaviour has to live in code the scripts call. And why not "just in this repo": the second project on this laptop would either copy it (drift) or share nothing (the machine-scope lease would see only one project). A package is the one shape that works on this laptop, on another laptop, in the cloud, and for someone else.</div>
+<div class="notice warn"><strong>Sequencing change.</strong> Tab 2 builds the <code>dblease</code> repo first (package, tests, skill), then wires <code>hybrid-donation</code> for #69 and the template. That is more work than v2's "scripts in this repo", and it is the better design by your own rule on implementation cost.</div>
+</div>
+
+<form data-lavish-question="distribution" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('q'); const n=event.currentTarget.querySelector('textarea').value.trim(); if(!c)return; window.lavish.queuePrompt('Distribution decision: '+c+(n?'. Notes: '+n:''), {tag:'choice', text:'Distribution: '+c, element:event.currentTarget, data:{question:'distribution', answer:c, notes:n}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+  <fieldset>
+    <legend>How the tool is published</legend>
+    <label><input type="radio" name="q" value="public npm package @sundeepdev/dblease from its own repo, MIT; consumed as a devDependency (recommended)"> Public npm package <code>@sundeepdev/dblease</code> from its own repo, MIT licence, consumed as a devDependency (recommended: works on any laptop, in CI and for others with plain <code>npm ci</code>)</label>
+    <label><input type="radio" name="q" value="private GitHub repo consumed as a git dependency"> Private GitHub repo consumed as a git dependency (keeps it private; every CI and cloud runner then needs a token to install)</label>
+    <label><input type="radio" name="q" value="keep it inside hybrid-donation for now, extract later"> Keep it inside <code>hybrid-donation</code> for now, extract later (fastest; the template and a second project get nothing until the extraction)</label>
+    <textarea placeholder="Package name, licence, or anything else (optional)"></textarea>
+    <button type="submit">Queue answer</button><span class="queued"></span>
+  </fieldset>
+</form>
+
+<h2 id="decisions">9. Decisions (recorded on #69, kept here for reference)</h2>
+<p>Each question queues one answer; press <em>Send to Agent</em> when done. Highlight any text above to comment on it separately.</p>
+
+<form data-lavish-question="readers" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('q'); if(!c)return; window.lavish.queuePrompt('Concurrent readers decision: '+c, {tag:'choice', text:'Readers: '+c, element:event.currentTarget, data:{question:'readers', answer:c}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+  <fieldset>
+    <legend>Concurrent readers</legend>
+    <label><input type="radio" name="q" value="readers run concurrently, including two E2E suites; add --exclusive only if flakiness is observed (recommended)"> Readers run concurrently, two E2E suites included; add <code>--exclusive</code> only if flakiness is observed (recommended, matches your feedback)</label>
+    <label><input type="radio" name="q" value="readers concurrent except E2E runs, which are exclusive among themselves from day one"> Readers concurrent, except E2E runs are exclusive among themselves from day one (safer for the auth backoff spec, blocks a second suite)</label>
+    <button type="submit">Queue answer</button><span class="queued"></span>
+  </fieldset>
+</form>
+
+<form data-lavish-question="version" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('q'); if(!c)return; window.lavish.queuePrompt('Schema version source decision: '+c, {tag:'choice', text:'Schema version: '+c, element:event.currentTarget, data:{question:'version', answer:c}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+  <fieldset>
+    <legend>Where the schema version lives</legend>
+    <label><input type="radio" name="q" value="derive from supabase/migrations plus the DB's schema_migrations table; write schema.json to the shared state dir after modifier runs (recommended)"> Derive it: <code>supabase/migrations/</code> in the repo plus the database's own <code>schema_migrations</code> table; the tool writes a derived <code>schema.json</code> to the shared state dir (recommended: no third copy to drift)</label>
+    <label><input type="radio" name="q" value="also maintain a committed version file in the repo, e.g. supabase/SCHEMA_VERSION, bumped with each migration"> Also keep a committed version file in the repo (for example <code>supabase/SCHEMA_VERSION</code>), bumped with each migration, with a check that it matches the migrations directory</label>
+    <button type="submit">Queue answer</button><span class="queued"></span>
+  </fieldset>
+</form>
+
+<form data-lavish-question="silence" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('q'); if(!c)return; window.lavish.queuePrompt('Silent-reader default decision: '+c, {tag:'choice', text:'Silence default: '+c, element:event.currentTarget, data:{question:'silence', answer:c}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+  <fieldset>
+    <legend>When a reader does not answer within the grace window</legend>
+    <label><input type="radio" name="q" value="treat silence as 'need until expected_until'; modifier waits with --wait or exits 75 with the ETA (recommended)"> Treat silence as "I need it until my <code>expected_until</code>"; the modifier waits under <code>--wait</code> or exits 75 with the ETA (recommended: protects unattended runs)</label>
+    <label><input type="radio" name="q" value="treat silence as consent after the grace window; modifier proceeds"> Treat silence as consent after the grace window; the modifier proceeds (faster, but a silent Playwright run gets destroyed)</label>
+    <button type="submit">Queue answer</button><span class="queued"></span>
+  </fieldset>
+</form>
+
+<form data-lavish-question="notify" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('q'); if(!c)return; window.lavish.queuePrompt('Notification channel decision: '+c, {tag:'choice', text:'Notify: '+c, element:event.currentTarget, data:{question:'notify', answer:c}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+  <fieldset>
+    <legend>How readers get told about a request</legend>
+    <label><input type="radio" name="q" value="request file plus macOS desktop banner plus db:lease status and an optional db:lease watch (recommended)"> Request file, plus a macOS desktop banner, plus it shows in <code>db:lease status</code>, plus optional <code>db:lease watch</code> for agents (recommended)</label>
+    <label><input type="radio" name="q" value="request file and status only, no desktop banner"> Request file and <code>status</code> only, no desktop banner (quieter; a human in another tab will not notice)</label>
+    <button type="submit">Queue answer</button><span class="queued"></span>
+  </fieldset>
+</form>
+
+<form data-lavish-question="sequencing" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('q'); if(!c)return; window.lavish.queuePrompt('Sequencing decision: '+c, {tag:'choice', text:'Sequencing: '+c, element:event.currentTarget, data:{question:'sequencing', answer:c}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+  <fieldset>
+    <legend>When and where to build it</legend>
+    <label><input type="radio" name="q" value="build now in WezTerm tab 2 on a 69 branch; its Playwright verification and gate run after #87 ships"> Build now in WezTerm tab 2 on a <code>69-…</code> branch (scripts and unit tests need no database); its Playwright verification and gate run after #87 ships (recommended)</label>
+    <label><input type="radio" name="q" value="wait until #87 has merged, then build in the main tree"> Wait until #87 has merged, then build in the main tree</label>
+    <button type="submit">Queue answer</button><span class="queued"></span>
+  </fieldset>
+</form>
+
+<form data-lavish-question="approval" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('ok'); const n=event.currentTarget.querySelector('textarea').value.trim(); if(!c)return; window.lavish.queuePrompt('Design v2 approval: '+c+(n?'. Notes: '+n:''), {tag:'approval', text:'Approval: '+c, element:event.currentTarget, data:{question:'approval', answer:c, notes:n}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+  <fieldset>
+    <legend>Approval</legend>
+    <label><input type="radio" name="ok" value="approved, build as designed"> Approved: build v2 as designed with the answers above. I will apply <code>ready-to-build</code> to #69.</label>
+    <label><input type="radio" name="ok" value="approved with changes"> Approved with the changes in my notes</label>
+    <label><input type="radio" name="ok" value="not yet"> Not yet, see my comments</label>
+    <textarea placeholder="Notes or changes (optional)"></textarea>
+    <button type="submit">Queue answer</button><span class="queued"></span>
+  </fieldset>
+</form>
+</main>
+</body>
+</html>
