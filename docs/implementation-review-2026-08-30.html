@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#69 HLD/LLD review: shared-resource leases, three tools in a tree</title>
+<style>
+  :root {
+    --maroon-50:#fbf3f1; --maroon-300:#d49a8c; --maroon-700:#6e2c22;
+    --saffron-300:#e8b75c; --saffron-400:#d99b33;
+    --sand-0:#ffffff; --sand-25:#fdfbf7; --sand-50:#f8f4ec; --sand-200:#e5dbca; --sand-300:#d2c5af; --sand-600:#6b5d4f; --sand-900:#241d18;
+    --ink-900:#17120f; --ink-800:#201a16; --ink-700:#2b231d; --ink-600:#3b3028; --ink-400:#7a6857;
+    --teal-700:#14634a; --teal-300:#4fb98c; --red-300:#f1867f; --green-300:#5fc79b; --amber-300:#e0ae4e; --blue-300:#7fb0dc;
+    --red-soft:#fbeded; --red-soft-border:#f0c9c9; --red-soft-text:#8c1d1d;
+    --green-soft:#dcf0e6; --green-soft-border:#b6dec8; --green-soft-text:#14522f;
+    --blue-soft:#edf4fa; --blue-soft-border:#cde0ef; --blue-soft-text:#1e4869;
+    --amber-soft:#faf0d9; --amber-soft-border:#ecd9a8; --amber-soft-text:#6b4600;
+    --bg:var(--sand-25); --surface:var(--sand-0); --surface-sunken:var(--sand-50);
+    --text:var(--sand-900); --text-muted:var(--sand-600); --border:var(--sand-200); --border-strong:var(--sand-300);
+    --primary:var(--maroon-700); --accent:var(--saffron-400); --success:#1b6b4c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:var(--ink-900); --surface:var(--ink-800); --surface-sunken:var(--ink-700);
+      --text:#f8f4ec; --text-muted:#b7a996; --border:var(--ink-600); --border-strong:var(--ink-400);
+      --primary:var(--maroon-300); --success:var(--green-300);
+      --red-soft:#3a1f1d; --red-soft-border:#5c322e; --red-soft-text:#f1b0aa;
+      --green-soft:#1b3328; --green-soft-border:#2c5240; --green-soft-text:#8fd8b4;
+      --blue-soft:#1c2c3a; --blue-soft-border:#2e4a63; --blue-soft-text:#a8cbe8;
+      --amber-soft:#38290e; --amber-soft-border:#5c4718; --amber-soft-text:#eccb84;
+    }
+  }
+  *,*::before,*::after{box-sizing:border-box}
+  :where(.grid,.flex,.cols)>*{min-width:0}
+  :where(p,h1,h2,h3,h4,li,dd,td,th,.chip){overflow-wrap:anywhere}
+  :where(img,svg,video,canvas){max-width:100%;height:auto}
+  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans",sans-serif}
+  main{max-width:980px;margin:0 auto;padding:24px 20px 96px}
+  h1{font-size:1.65rem;line-height:1.3;margin:.2em 0 .3em}
+  h2{font-size:1.25rem;margin:2.2em 0 .5em;padding-top:1em;border-top:1px solid var(--border)}
+  h3{font-size:1.05rem;margin:1.4em 0 .4em}
+  p{margin:.5em 0}
+  code{background:var(--surface-sunken);border:1px solid var(--border);border-radius:4px;padding:.05em .3em;font-size:.85em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  pre{background:var(--surface-sunken);border:1px solid var(--border);border-radius:8px;padding:12px 14px;overflow-x:auto;font-size:.82rem;line-height:1.5;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  pre code{background:none;border:0;padding:0;font-size:inherit}
+  .lede{color:var(--text-muted);font-size:1.02rem}
+  .chip{display:inline-block;border-radius:999px;padding:.1em .7em;font-size:.78rem;font-weight:600;border:1px solid var(--border-strong);background:var(--surface-sunken);vertical-align:middle}
+  .chip.danger{background:var(--red-soft);border-color:var(--red-soft-border);color:var(--red-soft-text)}
+  .chip.ok{background:var(--green-soft);border-color:var(--green-soft-border);color:var(--green-soft-text)}
+  .chip.info{background:var(--blue-soft);border-color:var(--blue-soft-border);color:var(--blue-soft-text)}
+  .chip.warn{background:var(--amber-soft);border-color:var(--amber-soft-border);color:var(--amber-soft-text)}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin:12px 0}
+  .card h3{margin-top:0}
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+  .notice{border-radius:10px;padding:12px 14px;margin:12px 0;border:1px solid}
+  .notice.danger{background:var(--red-soft);border-color:var(--red-soft-border);color:var(--red-soft-text)}
+  .notice.info{background:var(--blue-soft);border-color:var(--blue-soft-border);color:var(--blue-soft-text)}
+  .notice.warn{background:var(--amber-soft);border-color:var(--amber-soft-border);color:var(--amber-soft-text)}
+  table{border-collapse:collapse;width:100%;font-size:.92rem}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--text-muted);font-weight:600;font-size:.78rem;text-transform:uppercase;letter-spacing:.03em}
+  .tablewrap{overflow-x:auto}
+  figure{margin:16px 0} figcaption{color:var(--text-muted);font-size:.9rem;margin-top:6px}
+  svg text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .term{background:var(--ink-900);color:#f8f4ec;border-radius:10px;padding:14px 16px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.84rem;line-height:1.55;overflow-x:auto;margin:10px 0;white-space:pre}
+  .term .red{color:var(--red-300)} .term .dim{color:#b7a996} .term .amber{color:var(--amber-300)}
+  fieldset{border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin:12px 0;background:var(--surface)}
+  legend{font-weight:600;padding:0 6px}
+  label{display:block;padding:6px 0;cursor:pointer} label input{margin-right:8px}
+  textarea{width:100%;min-height:64px;border:1px solid var(--border-strong);border-radius:8px;padding:8px;font:inherit;background:var(--surface)}
+  button{font:inherit;border-radius:8px;border:1px solid var(--primary);background:var(--primary);color:#fff;padding:8px 14px;cursor:pointer;margin-top:8px}
+  .queued{font-size:.85rem;color:var(--success);margin-left:8px}
+  ol.tight li{margin:.35em 0}
+  .flag{font-weight:700;color:var(--red-soft-text)}
+  @media (prefers-color-scheme: dark){.flag{color:#f1b0aa}}
+</style>
+</head>
+<body>
+<main>
+<p><span class="chip">#69</span> <span class="chip">technical</span> <span class="chip info">HLD + LLD, founder review before code</span> <span class="chip">commit 2806a5d</span></p>
+<h1>Shared-resource leases: three tools in a tree</h1>
+<p class="lede">Engineering-lead's HLD (376 lines) and LLD (1,044 lines) for the first implementation of the
+<code>agent-leases</code> pattern, built here as the test bed. This page is the review surface: it carries the
+tree, the argument for it, every place the LLD departs from the design you approved on 2026-08-30, and the four
+questions the lead asks you. Highlight any line to comment; the forms queue your decisions. The full documents are
+<code>docs/architecture/69-shared-resource-leases-hld.md</code> and <code>-lld.md</code> on the 69 branch.</p>
+
+<h2 id="answers" style="border-top:0;margin-top:1em">0. Answers to your eight comments, and what each changes</h2>
+<p class="lede">Recorded so far: Q1 yes (wrap <code>dev</code>), Q2 agree (leases at 100%, existing scripts excluded, separate issue), Q3 yes (<code>foreign</code> stops the gate), and all four deferrable items cut. Still open: Q4 and approval, at the end. Each answer below says whether it changes the LLD; the amended items are collected in section 0.9 for one decision.</p>
+
+<div class="card"><h3>0.1 Rule 2: "if the parent is consulted, the children must be consulted too"</h3>
+<p>Agreed, and that is what Rule 2 already says: a modifier of T consults T <strong>and every descendant</strong> (the children, grandchildren, and so on). "Never an ancestor" means the other direction only: a <code>db:reset</code> does not ask the dev server sitting on <code>supabase</code> above it. The wording on the diagram was the problem, not the rule.</p>
+<p><strong>Your reframing as a dependency graph is better, and I propose adopting it.</strong> Each tool <em>declares what it depends on</em> (<code>db</code> depends on <code>supabase</code>, which depends on <code>docker</code>), the graph is a DAG rather than a strict tree (a future tool can depend on two things, say a device and a network service), and the one rule becomes: <em>a modifier of X consults the readers of X and of everything that depends on X, transitively</em>. Each tool adapter also declares its actions, tagged reader or modifier, as you suggest. Same behaviour as the tree in every case in the table; strictly more expressive; and the word "dependency" says why the rule is what it is. <span class="chip warn">changes LLD 2</span></p></div>
+
+<div class="card"><h3>0.2 When do readers wait by default?</h3>
+<p>Only in one situation: a reader is <em>starting</em> while a write lease is already active on its tool or on something its tool depends on, for example Playwright starting while a <code>db:reset</code> is halfway through. Then it waits, with a progress line, up to five minutes, instead of failing against a half-built database. During a normal run readers never wait for anything, and they are never interrupted; the pattern's whole point is that a running reader is left alone. <span class="chip ok">no change</span></p></div>
+
+<div class="card"><h3>0.3 "local-db.mjs is not wrapped", in plain words</h3>
+<p><code>scripts/lib/local-db.mjs</code> is a shared library, not a command. It holds the delicate three-step reset that seeds the donor-encryption key at the right moment (reviewed once under ADR-0011; a mistake there makes donor tax IDs unrecoverable). Commands such as <code>npm run db:reset</code> and <code>npm run db:start</code> call into it.</p>
+<p>The choice is <em>where</em> the lease is taken. Option A: inside the library, so every caller gets it for free. Option B: in each command script, just before it calls the library. The LLD picks B. Example: <code>npm run db:reset</code> runs <code>db-reset-local.mjs</code>, which takes the write lease on <code>db</code>, then calls the library exactly as today, then releases. Two reasons: the library's encryption-key code stays byte-for-byte as reviewed, and a script that already holds a lease can never accidentally take a second one through the library. Cost: the four entry scripts each get the same three lines. <span class="chip ok">no change</span></p></div>
+
+<div class="card"><h3>0.4 Should the state dir have subdirectories by tool, project or graph?</h3>
+<p>It does, by tool: <code>~/.local/state/agent-leases/&lt;tool&gt;/{leases,requests,state.json}</code>, one directory per node, and because node ids are <code>type:instance</code> (<code>db:hybrid-donation</code>), "per project" falls out of the naming without a second level. The graph itself is <em>not</em> encoded as directory nesting, because a DAG cannot be a directory tree; it is declared by the adapters and written once as <code>graph.json</code> beside the tool directories so <code>status</code> can draw it and a second repo can see what this one declared. <span class="chip warn">adds graph.json to LLD 3</span></p></div>
+
+<div class="card"><h3>0.5 Interruptible: a way to mark something important or urgent; environment-based configuration</h3>
+<p>Agreed, two additions. (a) A request carries <code>urgency: normal | urgent</code> and a lease carries <code>importance: normal | high</code>; <code>status</code> and every message show them, and an <em>urgent</em> request is what a human reaches for when a reset cannot wait, while a <em>high</em> importance lease is one a modifier should never treat as interruptible whatever its flag says. (b) An <strong>environment profile</strong> (<code>LEASE_PROFILE=dev|shared|prod-like</code>, defaults in a small config file) that sets the defaults: in <code>dev</code>, <code>dev</code>-server leases are interruptible and the grace window is 20 s; in <code>prod-like</code>, nothing is interruptible by default and the grace is longer. This slice implements the fields and the <code>dev</code> profile only; the others are documented as the shape. <span class="chip warn">changes LLD 3 and 4; new upstream finding</span></p>
+<p><strong>Added from your follow-up:</strong> every request carries a short free-text <code>message</code> from the modifier ("resetting to apply the #87 correction migrations", "restarting Docker to clear a hung container"), shown in the banner, in <code>status</code> and in the reader's refusal text, so a running agent can judge whether its own work is important enough to answer <code>need</code> or is itself dependent on the change and should answer <code>ok</code>. The message is required for <code>urgent</code> requests and optional otherwise. <span class="chip warn">changes LLD 3.3</span></p></div>
+
+<div class="card"><h3>0.6 The fifth outcome, <code>unknown</code>, in plain words</h3>
+<p>Before Playwright runs, the preflight asks Postgres "which migrations have you applied?" and compares with the checkout. To ask, it needs the <code>pg</code> library from <code>node_modules</code>. The no-mistakes gate runs in a throwaway worktree that often has no <code>node_modules</code>, so the question cannot be asked at all. Two choices: fail the run ("I could not check"), which blocks the gate for a reason that has nothing to do with the branch, or say "could not check, continuing" once and run the suite. The LLD picks the second and calls that outcome <code>unknown</code>. Relevance to the pattern: <em>a coordination layer must never be the reason a run fails, except by a finding of its own</em>; a probe that cannot run is not a finding. <span class="chip ok">no change</span></p></div>
+
+<div class="card"><h3>0.7 Queue modifiers like a merge queue, and batch pending changes</h3>
+<p>Partly agree, and the part I agree with is cheap. <strong>Ordering:</strong> requests are timestamped files, so "first posted goes first" costs nothing and needs no daemon; a second modifier waits its turn under <code>--wait</code> instead of being refused. Adopt. <strong>Take the latest state when your turn comes:</strong> adopt as "re-run the preflight at your turn and skip if already satisfied"; a <code>db:migrate</code> queued behind another finds nothing left to apply and exits clean. <strong>Batching several pending changes into one:</strong> only safe when they are the same kind. Two <code>db:migrate</code> requests coalesce naturally (the second is a no-op). Two <code>db:reset</code> requests from <em>different branches</em> cannot be merged: they want different schemas, and the second must still run after the first, which is the case that started this issue. So: FIFO queue, re-check at your turn, coalesce identical actions, never merge distinct resets. <span class="chip warn">changes LLD 4.3 and case 16 (refuse becomes wait-in-order)</span></p>
+<p><strong>Refined from your follow-up:</strong> coalescing is <em>per tool</em>, and it is decided by the re-check rather than by the action's name. Two <code>db:reset</code> requests on <code>db:hybrid-donation</code> merge when the first reset leaves the database in a state the second requester's checkout accepts (same branch, or same migration set): its re-check says <code>match</code> and it exits clean without resetting again. If the two requesters are on different branches, the second's re-check says <code>foreign</code> and it still resets, which is correct because the two genuinely want different schemas. Requests on different tools (<code>db:hybrid-donation</code> versus <code>db:other-repo</code>) are never compared. <span class="chip ok">consistent with 0.7</span></p></div>
+
+<div class="card"><h3>0.8 Interfaces with OS, harness and A2A adapters</h3>
+<p>Agreed, and it is the right way to make the pattern adoptable. The LLD will name five interfaces, each with this slice's one implementation: <code>StateStore</code> (a directory of JSON files), <code>Liveness</code> (<code>process.kill(pid, 0)</code>), <code>ToolAdapter</code> (declares dependencies, actions, estimates), <code>Probe</code> (returns the two sorted lists, or unknown), and <code>Notifier</code>. For <code>Notifier</code> this slice ships only "the status command" (desktop banners are cut), but the interface is where a harness adapter plugs in: Claude Code's cross-session messaging, an MCP notification, or an A2A task message are each one adapter. To your question, no harness or agent platform I know of has a shared-resource lease primitive: A2A negotiates <em>tasks</em> between agents, MCP exposes tools, and neither says anything about two agents sharing one database. That gap is the reason this repo exists. <span class="chip warn">changes LLD 1 and 15; new upstream finding</span></p></div>
+
+<div class="card" id="union"><h3>0.10 "If the database is the same, how can two resets want different schemas?" You are right, and it changes the preflight</h3>
+<p>They cannot, not on one shared database. Two branches that each need the database rebuilt to <em>their</em> migration set are not sharing it; they are taking turns destroying each other's state, and my 0.7 wording ("the second still resets, correctly") described that ping-pong as if it were fine. Your principle is the right one: <strong>a shared tool has one state, the same for every agent, and agents adapt to it rather than reset it to look like their own checkout.</strong></p>
+<p>What that means for the database, concretely: the shared state should converge to the <strong>union</strong> of every live branch's migrations. Migrations here are append-only and version-ordered (<code>check:migrations</code> forbids editing a merged one), so applying branch A's and branch B's migrations to one database is normal, and it is exactly what <code>main</code> will look like after both merge. The preflight outcomes become:</p>
+<div class="tablewrap"><table>
+<thead><tr><th>Database vs my checkout</th><th>Outcome</th><th>What happens</th></tr></thead>
+<tbody>
+<tr><td>Same set</td><td><span class="chip ok">match</span></td><td>proceed</td></tr>
+<tr><td>Database lacks some of mine</td><td><span class="chip info">behind</span></td><td>stop; <code>db:migrate -- --wait</code> applies only the missing ones, additive, negotiated. Never a reset.</td></tr>
+<tr><td>Database has extras from another branch, and all of mine are applied</td><td><span class="chip warn">ahead</span></td><td><strong>warn and proceed</strong>, naming the extra migrations and the branch that applied them, so a test that fails because of them is attributable. This replaces the old "foreign stops" for the superset case.</td></tr>
+<tr><td>Database lacks some of mine <em>and</em> has extras</td><td><span class="chip info">behind + ahead</span></td><td>the same <code>db:migrate</code>; afterwards it is <code>ahead</code>, and proceeds with the warning</td></tr>
+<tr><td><code>db:migrate</code> itself fails (two branches created conflicting migrations)</td><td><span class="chip danger">conflict</span></td><td>the one genuine case for <code>db:reset</code>, negotiated and serial, and it means those two branches cannot share this database until one merges. The message says so.</td></tr>
+<tr><td>Empty or absent / probe cannot run</td><td>none / unknown</td><td>as before</td></tr>
+</tbody></table></div>
+<p>Consequences: <code>db:reset</code> stops being the reflex and becomes the exception; the merge-queue question in 0.7 mostly dissolves, because queued <code>db:migrate</code> requests coalesce perfectly (each applies only what is still missing) and queued resets are rare; and the gate's usual outcome (<code>behind</code>) resolves additively without touching anyone else's work. The risk, stated: a superset can make one branch's tests fail when another branch's migration changes behaviour the first asserts (this repo has one such branch today, #47's grant-stripping migration). The warning names the culprit; <code>LEASE_STRICT_SCHEMA=1</code> restores "any difference stops" for whoever wants it. This supersedes Q3 as asked: <code>foreign</code> no longer exists as an outcome, so the question becomes whether <em>conflict</em> may fail the gate, and the answer is yes. <span class="chip warn">changes LLD 5, 6.4, cases 3, 4 and 16; the strongest upstream finding so far</span></p>
+<form data-lavish-question="union" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('q'); const n=event.currentTarget.querySelector('textarea').value.trim(); if(!c)return; window.lavish.queuePrompt('Shared-state convergence decision: '+c+(n?'. Notes: '+n:''), {tag:'choice', text:'Convergence: '+c, element:event.currentTarget, data:{question:'union',answer:c,notes:n}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+<fieldset><legend>Adopt "the shared database converges to the union; ahead warns and proceeds; reset only on conflict"?</legend>
+<label><input type="radio" name="q" value="adopt union convergence: behind migrates additively, ahead warns and proceeds, reset only on conflict, LEASE_STRICT_SCHEMA=1 opt-in (recommended)"> Adopt (recommended): <code>behind</code> migrates additively, <code>ahead</code> warns and proceeds, reset only on conflict, strict mode opt-in</label>
+<label><input type="radio" name="q" value="keep strict: any difference from my checkout stops the run; union only with an explicit flag"> Keep strict: any difference stops; the union behaviour only behind an explicit flag</label>
+<textarea placeholder="Notes (optional)"></textarea>
+<button type="submit">Queue answer</button><span class="queued"></span></fieldset></form>
+</div>
+
+<div class="card" id="amend"><h3>0.9 The amendments, in one decision</h3>
+<ol class="tight">
+<li>Dependency graph (DAG, declared by adapters, actions tagged reader/modifier, <code>graph.json</code>) replaces the tree in wording; behaviour identical for every case in section 10.</li>
+<li>The shared database converges to the union of live branches (0.10): <code>behind</code> migrates additively, <code>ahead</code> warns and proceeds, reset only on conflict; decided separately in 0.10.</li>
+<li>Modifiers queue FIFO by request time and re-check at their turn; coalescing is per tool and decided by that re-check (a second reset on the same database exits clean when the first already satisfied it, and still runs when it did not); different tools are never compared. Case 16 changes from "refuse" to "wait in order".</li>
+<li>Requests carry <code>urgency</code> and a short free-text <code>message</code> (required when urgent); leases carry <code>importance</code>; an environment profile sets defaults, with only <code>dev</code> implemented now.</li>
+<li>Five named interfaces with one implementation each; <code>Notifier</code> ships as status-only in this slice.</li>
+</ol>
+<p>Engineering-lead writes these as a dated addendum to the HLD/LLD before the engineer starts; nothing is built until you confirm them below with Q4 and approval.</p></div>
+
+<form data-lavish-question="amendments" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('q'); const n=event.currentTarget.querySelector('textarea').value.trim(); if(!c)return; window.lavish.queuePrompt('Amendments decision: '+c+(n?'. Notes: '+n:''), {tag:'choice', text:'Amendments: '+c, element:event.currentTarget, data:{question:'amendments',answer:c,notes:n}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+<fieldset><legend>Adopt the four amendments in 0.9?</legend>
+<label><input type="radio" name="q" value="adopt all four amendments as an addendum before build"> Adopt all four as an addendum before the build</label>
+<label><input type="radio" name="q" value="adopt with changes in notes"> Adopt with the changes in my notes</label>
+<label><input type="radio" name="q" value="do not adopt; build to the LLD as written"> Do not adopt; build to the LLD as written</label>
+<textarea placeholder="Changes to the amendments (optional)"></textarea>
+<button type="submit">Queue answer</button><span class="queued"></span></fieldset></form>
+
+<h2 id="tree">1. The graph, and the two rules</h2>
+<figure>
+<svg viewBox="0 0 900 330" width="100%" role="img" aria-labelledby="tree-title" style="color:var(--text)">
+  <title id="tree-title">docker at the root, supabase:hybrid-donation beneath it, db:hybrid-donation beneath that; a sibling supabase:other-repo dashed</title>
+  <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor" /></marker></defs>
+  <g id="n-docker"><rect x="300" y="16" width="300" height="72" rx="12" fill="var(--surface)" stroke="var(--border-strong)" stroke-width="1.5" />
+    <text x="450" y="40" text-anchor="middle" font-size="14" font-weight="700" fill="currentColor">docker</text>
+    <text x="450" y="58" text-anchor="middle" font-size="11.5" fill="var(--text-muted)">modifiers: restart, quit, prune</text>
+    <text x="450" y="74" text-anchor="middle" font-size="11.5" fill="var(--text-muted)">readers from this repo: none</text></g>
+  <path d="M450 88 L450 118" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr)" />
+  <g id="n-supabase"><rect x="270" y="122" width="360" height="72" rx="12" fill="var(--blue-soft)" stroke="var(--blue-soft-border)" stroke-width="1.5" />
+    <text x="450" y="146" text-anchor="middle" font-size="14" font-weight="700" fill="var(--blue-soft-text)">supabase:hybrid-donation</text>
+    <text x="450" y="164" text-anchor="middle" font-size="11.5" fill="var(--blue-soft-text)">modifiers: db:start, db:stop</text>
+    <text x="450" y="180" text-anchor="middle" font-size="11.5" fill="var(--blue-soft-text)">readers: the vite dev server, Studio</text></g>
+  <path d="M450 194 L450 224" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr)" />
+  <g id="n-db"><rect x="270" y="228" width="360" height="72" rx="12" fill="var(--green-soft)" stroke="var(--green-soft-border)" stroke-width="1.5" />
+    <text x="450" y="252" text-anchor="middle" font-size="14" font-weight="700" fill="var(--green-soft-text)">db:hybrid-donation</text>
+    <text x="450" y="270" text-anchor="middle" font-size="11.5" fill="var(--green-soft-text)">modifiers: db:reset, db:migrate, check:migration-against-tenant</text>
+    <text x="450" y="286" text-anchor="middle" font-size="11.5" fill="var(--green-soft-text)">readers: Playwright, psql, seeding</text></g>
+  <path d="M600 60 C700 60, 700 140, 700 140" stroke="currentColor" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#arr)" />
+  <g id="n-sibling"><rect x="660" y="144" width="230" height="52" rx="12" fill="var(--surface)" stroke="var(--border-strong)" stroke-dasharray="5 4" />
+    <text x="775" y="166" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--text-muted)">supabase:other-repo</text>
+    <text x="775" y="184" text-anchor="middle" font-size="11" fill="var(--text-muted)">a sibling, when a second repo adopts</text></g>
+  <g id="rules" font-size="12" fill="currentColor">
+    <text x="20" y="130" font-weight="700">Rule 1</text><text x="20" y="148">A reader registers on the</text><text x="20" y="164">most specific tool it uses.</text>
+    <text x="20" y="236" font-weight="700">Rule 2</text><text x="20" y="254">A modifier of X consults readers</text><text x="20" y="270">of X and of everything that</text><text x="20" y="286">depends on X, transitively.</text>
+  </g>
+  <text x="450" y="322" text-anchor="middle" font-size="11.5" fill="var(--text-muted)">Ancestry means containment of disruption, not ownership: everything a docker restart disturbs is under docker.</text>
+</svg>
+</figure>
+
+<h2 id="why">2. Why the tree beats the two flat scopes you approved</h2>
+<div class="tablewrap"><table>
+<thead><tr><th>Situation</th><th>Two flat scopes</th><th>Three tools in a tree</th></tr></thead>
+<tbody>
+<tr><td><code>db:reset</code> while <code>npm run dev</code> runs</td><td>The dev server is a project reader; it cannot answer, so the reset waits out its estimate or is forced</td><td>The dev server is on <code>supabase</code>, an ancestor: never asked. The reset proceeds at once, correctly</td></tr>
+<tr><td><code>npm run dev</code> starts during a <code>db:reset</code></td><td>Held for the whole reset</td><td>The write lease is on a descendant; Vite starts immediately</td></tr>
+<tr><td><code>db:stop</code> while Playwright runs</td><td>Asks Playwright. Correct</td><td>Asks Playwright, by the same one rule. Correct</td></tr>
+<tr><td>Restart only this project's containers</td><td>Not expressible</td><td><code>supabase:hybrid-donation</code> is its own node</td></tr>
+<tr><td>A Docker restart</td><td>A second, special-cased traversal into every project directory</td><td>The <code>docker</code> node's descendants; the same traversal as everything else</td></tr>
+<tr><td>A future device, emulator, staging environment</td><td>A third scope, then a fourth</td><td>A new node. No new concept</td></tr>
+</tbody></table></div>
+<p>The gain is not more features: <strong>one relation (ancestor / descendant) replaces two special cases</strong>, and it buys a
+distinction the flat model cannot express: changing what is in the database is a smaller act than taking the database away.</p>
+<div class="notice warn"><strong>What it costs (HLD 2.3).</strong> A reader registered at the wrong level is silently under-protected (mitigated: callers never pass a tool id, the adapters own registration). Node ids become a machine-global namespace, <code>type:instance</code>, to agree upstream before a second repo adopts. About thirty lines of graph walking. And <strong>the middle node is empty unless <code>npm run dev</code> is wrapped</strong>, which is founder question 1 below.</div>
+
+<h2 id="departures">3. Where the LLD departs from the approved design</h2>
+<p>The lead's summary flags these as contradictions of the 2026-08-30 text. None reverses one of your seven decisions; each closes a gap. <span class="flag">Flagged</span> ones change something you approved by name.</p>
+<div class="cols">
+  <div class="card"><h3><span class="flag">Flagged</span> An exhausted estimate never authorises a modifier</h3><p>The approved text can be read as "proceed when the ETA passes". That would destroy exactly the overrunning suite the pattern exists to protect. A live, non-interruptible reader blocks until it releases, answers ok, or is forced. The estimate is for planning and the message only.</p></div>
+  <div class="card"><h3><span class="flag">Flagged</span> Readers wait by default (up to 5 min); modifiers do not</h3><p>Approved text gave both sides an opt-in <code>--wait</code>. A test run that fails rather than waiting out a 90 s reset is a support request; a blocked modifier still exits 75 at once so an agent can do something else.</p></div>
+  <div class="card"><h3><span class="flag">Flagged</span> <code>scripts/lib/local-db.mjs</code> is not wrapped</h3><p>Leases live in the entry scripts instead, so the donor-crypto Vault split (ADR-0011) stays byte-identical and no caller can double-acquire. The new <code>db:migrate</code> re-establishes that invariant explicitly at statement level; the lead calls it the single riskiest line in the slice.</p></div>
+  <div class="card"><h3><span class="flag">Flagged</span> State dir is <code>~/.local/state/agent-leases</code>, not <code>dblease</code></h3><p>Two of the three tools are not databases, and it matches the upstream repo name. Cheap now, annoying later.</p></div>
+  <div class="card"><h3><code>interruptible: true</code> is consent given in advance</h3><p>The approved design defined the field and never said what a modifier does with it. Now: an interruptible reader (the dev server) is notified and not waited for, and can withdraw with <code>respond --need</code>.</p></div>
+  <div class="card"><h3>A fifth preflight outcome: <code>unknown</code></h3><p>When <code>import('pg')</code> fails in a worktree with no <code>node_modules</code> (the gate's norm), warn and proceed. Without it the layer fails closed in the one environment it was built to protect.</p></div>
+  <div class="card"><h3>Two modifiers refuse rather than race</h3><p>A write lease blocks another write lease anywhere on the same ancestor/descendant path. One extra check removes a limit the upstream README simply accepts.</p></div>
+  <div class="card"><h3>Fail closed on an unreadable lease; requests die with their poster</h3><p>Atomic writes make partial reads impossible, so an unparseable file is corruption and blocks (cleared with <code>release --force</code>). A request is removed when its poster exits, so <code>status</code> never fills with questions nobody is asking.</p></div>
+</div>
+
+<h2 id="sample">4. What the gate's agent will see most often</h2>
+<p>The lead expects <code>behind</code> to be the gate's usual outcome (its branch adds a migration the local database lacks). Today that is a wall of failing tests; after this it is:</p>
+<div class="term">The local database is BEHIND this checkout.
+
+  Missing from the database:  20260830120000_leases_probe.sql
+  Database head:              20260822090100  (built by db:reset from branch main, 2026-08-30 09:12)
+
+Apply just the missing ones, keeping the data:   npm run db:migrate -- --wait
+Or rebuild from scratch:                          npm run db:reset -- --wait
+
+Both ask anyone currently using the database first.</div>
+<p>Every refusal names the holder, the ETA and the exact command that resolves it (LLD section 9 lists all fifteen messages).</p>
+
+<h2 id="scope">5. Essential versus deferrable (HLD 10)</h2>
+<div class="cols">
+  <div class="card"><h3>Essential</h3><ul><li><code>core.mjs</code>: tree, leases, pid liveness, tokens, sweep</li><li>Requests, replies, 20 s grace, <code>--wait</code>, <code>--force</code>, exit 75</li><li>The <code>db</code> preflight, five outcomes, messages</li><li>Wraps on <code>db:reset</code>, <code>db:start</code>, <code>db:stop</code>, <code>check:migration-against-tenant</code>; new <code>db:migrate</code></li><li>Playwright <code>globalSetup</code> read lease and preflight (the gate inherits it)</li><li><code>lease status</code>, <code>hold</code>, <code>respond</code>, <code>release</code></li><li>AGENTS.md and README migration</li></ul></div>
+  <div class="card"><h3>Deferrable, in the lead's order</h3><ol class="tight"><li><code>lease watch</code></li><li>Desktop notification</li><li>The <code>npm run dev</code> wrapper (the only reader of the middle node)</li><li><code>lease request &lt;tool&gt; &lt;action&gt;</code> for a manual Docker restart</li><li>The Windows notification adapter</li></ol></div>
+</div>
+
+<h2 id="upstream">6. Sixteen findings already written for agent-leases (LLD 15)</h2>
+<p>The deliverable that justified building here first. Headlines: the tree replaces scopes; an exhausted estimate never authorises; <code>interruptible</code> defined; asymmetric waiting; fail closed on unreadable files; requests die with their poster; replies live in the reader's lease file; a fifth preflight outcome; estimates measured (max of last three plus 25%) and their source named; two modifiers refuse; an explicit "am I active" procedure; the state dir provably outside every checkout, tested; leases carry <code>host</code>; <code>state.json</code>'s <code>built_by</code> is the most valuable field in the system; the grace window injectable for tests; the middle node stays empty unless the most-used command is wrapped. Plus answers to the README's four open questions from having built it.</p>
+
+<h2 id="verify">7. How it is verified</h2>
+<p>No BDD layer (no product surface). Unit tests against temp state dirs and fake pids at 100% of <code>scripts/lib/leases/**</code>; process-level tests that spawn real <code>hold</code> children and a real modifier (the only layer that proves one process being right about another), including an assertion that <code>git status --porcelain</code> is empty after a full cycle; and a scripted manual proof against the real Playwright suite with a deliberately <code>foreign</code> database. The first two layers need no Docker or Postgres.</p>
+
+<h2 id="questions">8. The four founder questions, plus approval</h2>
+
+<form data-lavish-question="q1" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('q'); if(!c)return; window.lavish.queuePrompt('Q1 wrap npm run dev: '+c, {tag:'choice', text:'Q1: '+c, element:event.currentTarget, data:{question:'q1',answer:c}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+<fieldset><legend>Q1. Wrap <code>npm run dev</code> with an interruptible read lease on <code>supabase</code>?</legend>
+<label><input type="radio" name="q" value="yes, wrap dev with LEASE_DISABLE=1 escape hatch and warn-and-continue (lead recommends)"> Yes: it is what makes the middle node real; <code>LEASE_DISABLE=1</code> escape hatch, warn-and-continue on any lease failure (lead recommends)</label>
+<label><input type="radio" name="q" value="no, leave dev unwrapped; middle node stays prospective"> No: leave <code>dev</code> alone for now; the tree stands with a prospective middle node</label>
+<button type="submit">Queue answer</button><span class="queued"></span></fieldset></form>
+
+<form data-lavish-question="q2" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('q'); if(!c)return; window.lavish.queuePrompt('Q2 coverage set: '+c, {tag:'choice', text:'Q2: '+c, element:event.currentTarget, data:{question:'q2',answer:c}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+<fieldset><legend>Q2. Coverage: only <code>scripts/lib/leases/**</code> joins the 100% set; the other eleven pre-existing <code>scripts/*.mjs</code> (about 1,500 untested lines) stay out with a written justification and a separate issue?</legend>
+<label><input type="radio" name="q" value="agree: leases at 100%, existing scripts excluded with justification, file a separate issue (lead recommends)"> Agree (lead recommends): this is #69, not a tooling-coverage sweep</label>
+<label><input type="radio" name="q" value="bring all scripts into coverage in this slice"> Bring all scripts into the coverage set in this slice</label>
+<button type="submit">Queue answer</button><span class="queued"></span></fieldset></form>
+
+<form data-lavish-question="q3" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('q'); if(!c)return; window.lavish.queuePrompt('Q3 foreign fails the gate: '+c, {tag:'choice', text:'Q3: '+c, element:event.currentTarget, data:{question:'q3',answer:c}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+<fieldset><legend>Q3. May a <code>foreign</code> preflight fail the no-mistakes gate's test step?</legend>
+<label><input type="radio" name="q" value="yes, foreign stops the run; LEASE_ALLOW_FOREIGN=1 is the documented escape hatch (lead recommends)"> Yes (lead recommends): a suite against a schema this branch never saw is worse than a clear stop; <code>LEASE_ALLOW_FOREIGN=1</code> is the escape hatch, named in the message</label>
+<label><input type="radio" name="q" value="no, foreign only warns in the gate"> No: in the gate, <code>foreign</code> warns and the suite runs anyway</label>
+<button type="submit">Queue answer</button><span class="queued"></span></fieldset></form>
+
+<form data-lavish-question="q4" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('q'); if(!c)return; window.lavish.queuePrompt('Q4 readers wait by default: '+c, {tag:'choice', text:'Q4: '+c, element:event.currentTarget, data:{question:'q4',answer:c}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+<fieldset><legend>Q4. Readers wait by default (up to 5 min, with a progress line) when a write lease is active; modifiers exit 75 at once?</legend>
+<label><input type="radio" name="q" value="yes, asymmetric waiting: readers wait up to 5 min, modifiers exit 75 (lead recommends)"> Yes (lead recommends): a possible five-minute stall in exchange for never failing a run because someone was resetting</label>
+<label><input type="radio" name="q" value="no, keep symmetric opt-in --wait for both as approved"> No: keep the approved symmetric opt-in <code>--wait</code> on both sides</label>
+<button type="submit">Queue answer</button><span class="queued"></span></fieldset></form>
+
+<form data-lavish-question="cuts" onsubmit="event.preventDefault(); const fd=new FormData(event.currentTarget); const c=fd.getAll('cut'); const v=c.length?c.join('; '):'no cuts'; window.lavish.queuePrompt('Deferrable items to cut from this slice: '+v, {tag:'choice', text:'Cuts: '+v, element:event.currentTarget, data:{question:'cuts',answer:c}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+<fieldset><legend>Cut any of the deferrable items from this slice? (tick to cut; none ticked means build all five)</legend>
+<label><input type="checkbox" name="cut" value="lease watch"> <code>lease watch</code></label>
+<label><input type="checkbox" name="cut" value="desktop notification"> Desktop notification</label>
+<label><input type="checkbox" name="cut" value="lease request for manual docker restart"> <code>lease request &lt;tool&gt; &lt;action&gt;</code></label>
+<label><input type="checkbox" name="cut" value="windows notification adapter"> Windows notification adapter</label>
+<button type="submit">Queue answer</button><span class="queued"></span></fieldset></form>
+
+<form data-lavish-question="approval" onsubmit="event.preventDefault(); const c=new FormData(event.currentTarget).get('ok'); const n=event.currentTarget.querySelector('textarea').value.trim(); if(!c)return; window.lavish.queuePrompt('HLD/LLD approval: '+c+(n?'. Notes: '+n:''), {tag:'approval', text:'Approval: '+c, element:event.currentTarget, data:{question:'approval',answer:c,notes:n}}); event.currentTarget.querySelector('.queued').textContent='queued';">
+<fieldset><legend>Approval</legend>
+<label><input type="radio" name="ok" value="approved, build to the LLD with the answers above; I will apply ready-to-build to #69"> Approved: build to the LLD with the answers above. I will apply <code>ready-to-build</code> to #69.</label>
+<label><input type="radio" name="ok" value="approved with changes in notes"> Approved with the changes in my notes</label>
+<label><input type="radio" name="ok" value="not yet, see comments"> Not yet, see my comments</label>
+<textarea placeholder="Notes or changes (optional)"></textarea>
+<button type="submit">Queue answer</button><span class="queued"></span></fieldset></form>
+</main>
+</body>
+</html>
