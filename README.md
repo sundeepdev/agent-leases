@@ -12,7 +12,52 @@ the database. It is written here without that specificity so it can be applied t
 shared thing.
 
 This repository holds the pattern, its rationale, the decisions behind it, and the
-findings from its first implementation. See [Status](#status).
+findings from its first implementation. It also includes a small, dependency-free Node
+reference example so the lease flow can be run locally. See [Status](#status).
+
+## Runnable reference example
+
+The example coordinates a fake shared resource named `demo-resource`. It stores leases
+and requests as versioned JSON files in `AGENT_LEASES_STATE_DIR` (or
+`~/.agent-leases/demo` by default), outside the checkout. Node 20 or newer is the only
+runtime dependency.
+
+```sh
+npm test
+export AGENT_LEASES_STATE_DIR="/tmp/agent-leases-demo"
+npm run lease -- init
+npm run lease -- resource set --applied 001-base --built-by seed
+npm run lease -- preflight --expected 001-base,002-local
+# behind: the resource is missing 002-local; ahead is also reported when applicable
+```
+
+To see the coordination flow, use two terminals with the same state-directory:
+
+```sh
+# Terminal A: this stays alive until Ctrl-C, releasing its read lease on exit
+npm run lease -- acquire --kind read --purpose "test suite A" --hold
+
+# Terminal B: another reader is allowed, but a modifier is refused and posts a request
+npm run lease -- acquire --kind read --purpose "test suite B" --hold
+npm run lease -- status
+npm run lease -- acquire --kind write --purpose "apply local change" \
+  --operation "update demo resource" --message "adding 002-local"
+# The command exits 75 and names Terminal A/B plus the request id.
+```
+
+Stop both readers with Ctrl-C, then a modifier can hold the resource exclusively:
+
+```sh
+npm run lease -- acquire --kind write --purpose "apply local change" --hold
+# In another terminal, status shows the write holder; release it with Ctrl-C.
+```
+
+A refused write creates a request file. `status` shows pending requests, and
+`npm run lease -- withdraw REQUEST_ID` removes one that is no longer needed. A lease can
+also be released explicitly with `npm run lease -- release LEASE_ID --token TOKEN`;
+`acquire` prints both values. The library exposes the same operations through
+`LeaseStore` in [`src/leases.js`](src/leases.js), while [`src/cli.js`](src/cli.js) is the
+small adapter for the demo resource.
 
 ## The problem
 
