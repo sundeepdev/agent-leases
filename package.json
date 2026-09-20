@@ -1,0 +1,21 @@
+{
+  "name": "agent-leases",
+  "version": "0.1.0",
+  "description": "A small, runnable reference implementation of leases for shared resources",
+  "type": "module",
+  "bin": {
+    "agent-leases": "src/cli.js"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "lease": "node src/cli.js",
+    "test": "node --test",
+    "demo": "node src/cli.js status"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
