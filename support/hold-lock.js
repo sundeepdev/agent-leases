@@ -1,7 +1,6 @@
-import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
-import { currentProcessIdentity } from "../src/identity.js";
+import { writeFileSync } from "node:fs";
+import { spawnFileLock, waitForLock } from "../src/flock.js";
 
 const stateDir = process.argv[2];
 const readyFile = process.argv[3];
@@ -10,7 +9,8 @@ if (!stateDir || !readyFile) {
   process.exit(2);
 }
 
-const owner = { ...currentProcessIdentity(), token: randomUUID() };
-writeFileSync(path.join(stateDir, "lock"), JSON.stringify(owner), { flag: "wx", mode: 0o600 });
+const child = spawnFileLock(path.join(stateDir, "lock"));
+const outcome = await waitForLock(child, 5000);
+if (outcome !== "locked") process.exit(1);
 writeFileSync(readyFile, "ready");
 setInterval(() => {}, 60_000);

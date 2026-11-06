@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { promises as fs, constants as fsConstants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnFileLock, waitForLock, releaseFileLock } from "./flock.js";
 import { currentProcessIdentity, decideLiveness, localIdentity, probeProcess } from "./identity.js";
 import {
   isResourceName,
@@ -22,7 +23,6 @@ const MAX_ENTRIES = 4096;
 const MAX_BYTES = 64 * 1024;
 const NOFOLLOW = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
 
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const nowIso = () => new Date().toISOString();
 
 export class LeaseUnavailable extends Error {
@@ -111,8 +111,13 @@ export class LeaseStore {
     await fs.mkdir(this.stateDir, { recursive: true, mode: 0o700 });
     const root = await fs.lstat(this.stateDir);
     if (root.isSymbolicLink() || !root.isDirectory()) throw new Error("state directory must be a real directory");
-    const real = await fs.realpath(this.stateDir);
-    if (real !== this.stateDir) throw new Error("state directory must not be a symlink");
+    // Ancestors such as macOS /var -> /private/var may be symlinks. Only the
+    // state directory itself must be a real directory.
+    const parentReal = await fs.realpath(path.dirname(this.stateDir));
+    const selfReal = await fs.realpath(this.stateDir);
+    if (selfReal !== path.join(parentReal, path.basename(this.stateDir))) {
+      throw new Error("state directory must not be a symlink");
+    }
     await fs.chmod(this.stateDir, 0o700);
     for (const directory of [this.leasesDir, this.requestsDir, this.resourcesDir]) {
       const current = await fs.lstat(directory).catch((error) => {
@@ -629,119 +634,24 @@ export class LeaseStore {
 
   async #withLock(fn) {
     await this.init();
-    const owner = { ...currentProcessIdentity(), token: randomUUID() };
-    if (!validateIdentity(owner, owner.pid)) {
-      throw new Error("refusing to lock the store without a complete local process identity");
-    }
     const lockPath = path.join(this.stateDir, "lock");
-    const started = Date.now();
-    // Observations belong to this wait only. A previous uncertain timeout must not leak.
-    let observed = null;
-    let held = false;
-    while (!held) {
-      try {
-        await fs.writeFile(lockPath, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
-        held = true;
-      } catch (error) {
-        if (error.code !== "EEXIST") throw error;
-        const outcome = await this.#recoverLock(lockPath);
-        if (outcome.recovered) continue;
-        observed = outcome.state;
-        if (Date.now() - started > this.lockWaitMs) {
-          if (observed === "unknown") {
-            throw new LeaseUncertain("lease store lock holder cannot be confirmed; refusing to continue", {
-              reason: "lock-uncertain",
-            });
-          }
-          throw new LeaseUnavailable("timed out waiting for the lease store lock", { reason: "lock-timeout" });
-        }
-        await delay(15);
-      }
+    const child = spawnFileLock(lockPath);
+    let outcome;
+    try {
+      outcome = await waitForLock(child, this.lockWaitMs);
+    } catch (error) {
+      await releaseFileLock(child);
+      throw error;
+    }
+    if (outcome === "timeout") {
+      await releaseFileLock(child);
+      throw new LeaseUnavailable("timed out waiting for the lease store lock", { reason: "lock-timeout" });
     }
     try {
       return await fn();
     } finally {
-      await this.#releaseLock(lockPath, owner.token);
+      await releaseFileLock(child);
     }
-  }
-
-  async #releaseLock(lockPath, token) {
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      try {
-        const current = JSON.parse(await fs.readFile(lockPath, "utf8"));
-        if (current.token === token) await fs.unlink(lockPath);
-        return;
-      } catch (error) {
-        if (error.code !== "ENOENT") return;
-        await delay(5);
-      }
-    }
-  }
-
-  async #recoverLock(lockPath) {
-    let buffer;
-    try {
-      buffer = await fs.readFile(lockPath);
-    } catch (error) {
-      if (error.code === "ENOENT") return { recovered: true, state: "absent" };
-      return { recovered: false, state: "unknown" };
-    }
-    let owner = null;
-    try {
-      owner = JSON.parse(buffer.toString("utf8"));
-    } catch {
-      owner = null;
-    }
-    const stat = await fs.stat(lockPath).catch(() => null);
-    if (!stat) return { recovered: true, state: "absent" };
-    const age = Date.now() - stat.mtimeMs;
-    const invalid = !owner || typeof owner.token !== "string" || !validateIdentity(owner, owner.pid);
-    if (invalid) {
-      if (age < this.lockPublishGraceMs) return { recovered: false, state: "unknown" };
-    } else {
-      const liveness = decideLiveness(owner, localIdentity(), probeProcess(owner.pid));
-      if (liveness !== "dead") return { recovered: false, state: liveness === "unknown" ? "unknown" : "alive" };
-    }
-    const taken = await this.#takeStaleLock(lockPath, buffer);
-    if (taken === "taken" || taken === "gone") return { recovered: true, state: "absent" };
-    return { recovered: false, state: "alive" };
-  }
-
-  async #takeStaleLock(lockPath, expected) {
-    const claimPath = `${lockPath}.${process.pid}.${randomUUID()}.claim`;
-    try {
-      await fs.rename(lockPath, claimPath);
-    } catch (error) {
-      if (error.code === "ENOENT") return "gone";
-      throw error;
-    }
-    let moved;
-    try {
-      moved = await fs.readFile(claimPath);
-    } catch (error) {
-      if (error.code !== "ENOENT") await this.#restoreClaim(claimPath, lockPath);
-      return "gone";
-    }
-    if (Buffer.compare(moved, expected) === 0) {
-      await fs.unlink(claimPath).catch((error) => {
-        if (error.code !== "ENOENT") throw error;
-      });
-      return "taken";
-    }
-    await this.#restoreClaim(claimPath, lockPath);
-    return "restored";
-  }
-
-  async #restoreClaim(claimPath, lockPath) {
-    try {
-      await fs.link(claimPath, lockPath);
-    } catch (error) {
-      if (error.code === "EEXIST" || error.code === "ENOENT") return;
-      throw error;
-    }
-    await fs.unlink(claimPath).catch((error) => {
-      if (error.code !== "ENOENT") throw error;
-    });
   }
 
   async #writeJson(filename, value) {

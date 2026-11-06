@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -408,61 +408,47 @@ test("a repeated write refusal reuses the same request", async () => {
   }
 });
 
-test("a later lock timeout does not reuse an earlier uncertain result", async () => {
-  const store = await tempStore({ lockWaitMs: 180, lockPublishGraceMs: 60_000 });
+test("a lock timeout does not stick after the holder exits", async () => {
+  const store = await tempStore({ lockWaitMs: 300 });
+  const ready = path.join(store.stateDir, "holder-ready");
+  const holder = spawn(process.execPath, [path.join(process.cwd(), "support/hold-lock.js"), store.stateDir, ready], {
+    stdio: "ignore",
+    env: testEnv(),
+  });
   try {
-    await store.init();
-    const lockPath = path.join(store.stateDir, "lock");
-    await writeFile(lockPath, "");
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      try {
+        await readFile(ready);
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+      }
+    }
     await assert.rejects(
-      () => store.acquire({ kind: "read", purpose: "first", resource }),
-      (error) => error instanceof LeaseUncertain && error.reason === "lock-uncertain",
-    );
-    const live = { ...currentProcessIdentity(), token: "66666666-6666-4666-8666-666666666666" };
-    await writeFile(lockPath, JSON.stringify(live));
-    await assert.rejects(
-      () => store.acquire({ kind: "read", purpose: "second", resource }),
+      () => store.acquire({ kind: "read", purpose: "waiting", resource }),
       (error) => error instanceof LeaseUnavailable && error.reason === "lock-timeout",
     );
+    holder.kill("SIGKILL");
+    await new Promise((resolve) => holder.once("exit", resolve));
+    const next = new LeaseStore({ stateDir: store.stateDir, lockWaitMs: 3_000 });
+    const lease = await next.acquire({ kind: "read", purpose: "after", resource });
+    assert.equal(lease.kind, "read");
+    await next.release(lease.id, lease.token);
   } finally {
+    try { holder.kill("SIGKILL"); } catch { /* already exited */ }
     await removeStore(store);
   }
 });
 
-test("a dead lock is recovered and an unconfirmed lock is not stolen", async () => {
+test("a leftover lock file does not block when nobody holds the OS lock", async () => {
   const store = await tempStore();
   try {
     await store.init();
-    const lockPath = path.join(store.stateDir, "lock");
-    const dead = { ...currentProcessIdentity(), pid: 2147483646, token: "44444444-4444-4444-8444-444444444444" };
-    await writeFile(lockPath, JSON.stringify(dead));
-    const recovered = await store.acquire({ kind: "read", purpose: "after stale lock", resource });
-    assert.equal(recovered.kind, "read");
-    await store.release(recovered.id, recovered.token);
-
-    const live = { ...currentProcessIdentity(), token: "55555555-5555-4555-8555-555555555555" };
-    await writeFile(lockPath, JSON.stringify(live));
-    const busy = new LeaseStore({ stateDir: store.stateDir, lockWaitMs: 200 });
-    await assert.rejects(
-      () => busy.acquire({ kind: "read", purpose: "waiting", resource }),
-      (error) => error instanceof LeaseUnavailable && error.reason === "lock-timeout",
-    );
-    assert.equal(await readFile(lockPath, "utf8").then((text) => JSON.parse(text).token), live.token);
-    await rm(lockPath);
-
-    await writeFile(lockPath, "");
-    const old = new Date(Date.now() - 10_000);
-    await utimes(lockPath, old, old);
-    const patient = new LeaseStore({ stateDir: store.stateDir, lockPublishGraceMs: 1_000 });
-    const afterEmpty = await patient.acquire({ kind: "read", purpose: "after empty lock", resource });
-    await patient.release(afterEmpty.id, afterEmpty.token);
-
-    await writeFile(lockPath, "");
-    const cautious = new LeaseStore({ stateDir: store.stateDir, lockWaitMs: 200, lockPublishGraceMs: 60_000 });
-    await assert.rejects(
-      () => cautious.acquire({ kind: "read", purpose: "fresh empty lock", resource }),
-      (error) => error instanceof LeaseUncertain,
-    );
+    await writeFile(path.join(store.stateDir, "lock"), "not a held lock");
+    const lease = await store.acquire({ kind: "read", purpose: "after leftover file", resource });
+    assert.equal(lease.kind, "read");
+    await store.release(lease.id, lease.token);
   } finally {
     await removeStore(store);
   }

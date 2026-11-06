@@ -189,7 +189,10 @@ test("--hold releases the lease when the process is signalled", async () => {
     "acquire", "--kind", "write", "--purpose", "held", "--hold", "--state-dir", stateDir,
   ]);
   try {
-    await waitForLease(stateDir);
+    const announced = Date.now() + 5_000;
+    while (Date.now() < announced && !running.output().stderr.includes("Holding")) {
+      await delay(15);
+    }
     process.kill(running.child.pid, "SIGTERM");
     const outcome = await running.exited;
     assert.equal(outcome.code, 0);

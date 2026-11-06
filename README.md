@@ -45,7 +45,7 @@ treated as death.
 | Capability | In this package |
 | --- | --- |
 | Read leases coexist; one writer excludes other writers and readers of the same resource | Implemented |
-| Atomic check-and-claim on one host | Implemented. The store lock is taken over by renaming a stale file and checking that the moved bytes are the ones judged dead |
+| Atomic check-and-claim on one host | Implemented with an OS file lock (`flock`). The kernel releases it when the holder process dies |
 | `expectedUntil` is an estimate and never expires a live holder | Implemented |
 | Fail closed on unreadable, unknown-version, or invalid holder records | Implemented |
 | Process identity: pid, start time, boot id, machine id, platform | Linux uses `/proc` and `/etc/machine-id`, plus a PID namespace. macOS uses `IOPlatformUUID`, `kern.boottime`, and `ps -o lstart=` |
@@ -531,8 +531,10 @@ Breaking changes from 0.1.0:
 Durability is best-effort on a local POSIX filesystem: each record is written to a
 temporary file, fsynced, and renamed into place. There is no directory fsync and no
 promise about power loss or network filesystems. A crash can leave a `*.tmp` file; it
-is not treated as a holder. The store lock is reclaimed when its owner is positively
-dead, or when it never published an identity and is older than the publish grace.
+is not treated as a holder. The store lock is `flock` on the lock file, held by a
+short-lived Perl helper (`/usr/bin/perl` on macOS and typical Linux). The kernel
+releases that lock when the helper exits, which it does when the caller exits or is
+killed. A leftover lock file does not by itself block anyone.
 
 Open questions, in the order they need answering:
 
