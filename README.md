@@ -13,51 +13,129 @@ shared thing.
 
 This repository holds the pattern, its rationale, the decisions behind it, and the
 findings from its first implementation. It also includes a small, dependency-free Node
-reference example so the lease flow can be run locally. See [Status](#status).
+reference implementation so the lease flow can be run locally. See [Status](#status).
 
-## Runnable reference example
+## What this package does
+
+Version 0.2.0 coordinates cooperating processes that share one flat resource name on
+**one Linux host and one PID namespace**. It is coordination, not access control:
+anyone who can rewrite the state directory can ignore it. The supported store is a
+local POSIX directory (the CI target is Ubuntu). Network filesystems and Windows are
+not a supported store.
+
+Readers of the same resource can hold leases together. A writer acquires only when
+that resource has no live reader and no other writer. Check and claim are one
+locked step, so two conflicting callers cannot both be granted. `expectedUntil` is a
+planning estimate. It is not a TTL. A live holder is never removed or overridden
+because the estimate has passed, and silence is never consent. `interruptible` and
+`importance` are stored for people to read; they do not authorize a writer.
+
+An unreadable, unknown-version, or invalid holder record blocks acquisition. If the
+file names a resource, that resource is blocked. If the resource cannot be read, the
+whole store is blocked. The file is kept. A holder is removed only when this same
+machine and boot can prove that process is dead, and only from `acquire`, `reclaim`,
+or `listLeases({ clean: true })`. `status` does not delete records. Unknown liveness
+(a foreign machine, another PID namespace, an invalid pid, or an unexpected probe
+error) stays in force and blocks a conflicting acquire.
+
+| Capability | In this package |
+| --- | --- |
+| Read leases coexist; one writer excludes other writers and readers of the same resource | Implemented |
+| Atomic check-and-claim on one host | Implemented, via an exclusive store lock with stale-lock recovery |
+| `expectedUntil` is an estimate and never expires a live holder | Implemented |
+| Fail closed on unreadable, unknown-version, or invalid holder records | Implemented |
+| Process identity: pid, start time, boot id, machine id, PID namespace | Implemented on Linux `/proc` and `/etc/machine-id` |
+| `withLease` and `run` hold the lease for the whole operation | Implemented |
+| Private state directory (`0700`) and record files (`0600`); tokens omitted from `status` | Implemented |
+| Dependency graph across resource names | Design only. Different names do not conflict |
+| FIFO / writer fairness | Design only. A request is a durable proposal, not a queue |
+| Consent replies (`ok`, `need N`) and `--wait` | Design only. Every live reader blocks a writer |
+| Heartbeats and foreign-host expiry | Not implemented. Do not share one store across hosts |
+| Preflight against a real database or device | Not implemented. Preflight compares a demo JSON record |
+| Environment profiles, activation, injected messages, event log | Design only |
+
+Record format version is **2**. A version 1 file is an uncertain holder: it blocks,
+and it is not deleted automatically.
+
+## Runnable reference
 
 The example coordinates a fake shared resource named `demo-resource`. It stores leases
 and requests as versioned JSON files in `AGENT_LEASES_STATE_DIR` (or
-`~/.agent-leases/demo` by default), outside the checkout. Node 20 or newer is the only
-runtime dependency.
+`~/.agent-leases/demo` by default). Node 20 or newer is the only runtime dependency.
+Create the directory outside the checkout when more than one checkout must share it;
+the code accepts the path you pass and does not try to prove it is outside a checkout.
 
 ```sh
 npm test
 export AGENT_LEASES_STATE_DIR="/tmp/agent-leases-demo"
 npm run lease -- init
-npm run lease -- resource set --applied 001-base --built-by seed
+npm run lease -- resource seed --applied 001-base --built-by seed
 npm run lease -- preflight --expected 001-base,002-local
-# behind: the resource is missing 002-local; ahead is also reported when applicable
+# behind: the demo record is missing 002-local. Exit status stays 0.
+# Add --strict to exit 2 unless the outcome is match.
 ```
 
-To see the coordination flow, use two terminals with the same state-directory:
+`resource seed` writes the demo record without a lease. It is a fixture for this
+example. `resource set` is the guarded write: it requires `--lease` and `--token`
+from a live write lease. `preflight` only reads that JSON record. It does not inspect
+a database, container, or device.
+
+Hold a lease for the whole operation with `run`. The command acquires, records the
+child process as the holder, waits for it, and releases on the way out. A conflicting
+acquire stays refused while that child is alive, including after the parent `run`
+process is killed. `acquire` without `--hold` prints a lease and exits; the next
+caller can reclaim it as soon as that process is dead, so it does not cover a later
+command.
+
+Use three shells that share `AGENT_LEASES_STATE_DIR`, or background the first two:
 
 ```sh
-# Terminal A: this stays alive until Ctrl-C, releasing its read lease on exit
-npm run lease -- acquire --kind read --purpose "test suite A" --hold
+# Terminal A — stays in the foreground until the command exits or you press Ctrl-C
+npm run lease -- run --kind read --purpose "test suite A" -- sleep 300
 
-# Terminal B: another reader is allowed, but a modifier is refused and posts a request
-npm run lease -- acquire --kind read --purpose "test suite B" --hold
-npm run lease -- status
+# Terminal B — a second reader is allowed
+npm run lease -- run --kind read --purpose "test suite B" -- sleep 300
+
+# Terminal C — a writer is refused, posts a request, and exits 75
 npm run lease -- acquire --kind write --purpose "apply local change" \
   --operation "update demo resource" --message "adding 002-local"
-# The command exits 75 and names Terminal A/B plus the request id.
+npm run lease -- status
 ```
 
-Stop both readers with Ctrl-C, then a modifier can hold the resource exclusively:
+Stop A and B with Ctrl-C. Terminal C can then run the change under a write lease:
 
 ```sh
-npm run lease -- acquire --kind write --purpose "apply local change" --hold
-# In another terminal, status shows the write holder; release it with Ctrl-C.
+npm run lease -- run --kind write --purpose "apply local change" -- sleep 30
 ```
 
-A refused write creates a request file. `status` shows pending requests, and
-`npm run lease -- withdraw REQUEST_ID` removes one that is no longer needed. A lease can
-also be released explicitly with `npm run lease -- release LEASE_ID --token TOKEN`;
-`acquire` prints both values. The library exposes the same operations through
-`LeaseStore` in [`src/leases.js`](src/leases.js), while [`src/cli.js`](src/cli.js) is the
-small adapter for the demo resource.
+`acquire --hold` is the lease-only form of the same idea: the CLI process stays alive
+and releases on Ctrl-C or `SIGTERM`. A refused write prints the request id and token.
+Withdraw it with `npm run lease -- withdraw REQUEST_ID --token TOKEN`. Release a lease
+you still hold with `npm run lease -- release LEASE_ID --token TOKEN`. `status` and
+`status --json` omit tokens. Library callers use `LeaseStore` in
+[`src/leases.js`](src/leases.js) (`acquire`, `withLease`, `release`, `supervise`) and
+[`src/cli.js`](src/cli.js) is the demo adapter.
+
+From JavaScript, `withLease` acquires, runs the function, and releases on success or
+failure:
+
+```js
+import { LeaseStore } from "agent-leases";
+
+const store = new LeaseStore({ stateDir: process.env.AGENT_LEASES_STATE_DIR });
+await store.withLease(
+  { kind: "write", resource: "demo-resource", purpose: "apply local change" },
+  async (lease) => {
+    await store.setResourceState({
+      resource: "demo-resource",
+      applied: ["001-base", "002-local"],
+      builtBy: "demo",
+      leaseId: lease.id,
+      token: lease.token,
+    });
+  },
+);
+```
 
 ## The problem
 
@@ -76,6 +154,11 @@ the database") does not survive a second session, a new crew, or a tool that run
 worktree out of sight.
 
 ## The pattern in one paragraph
+
+From here through the case table, the text is the design. The table in
+[What this package does](#what-this-package-does) is what the reference code enforces.
+A graph, a queue, a consent reply, a real probe, or expiry in the sections below is the
+intended pattern. The reference package does not do those things.
 
 **Using** a shared resource is not the problem; **changing** it is. So readers coexist and
 only modifiers have to ask. Every user of the resource holds a lightweight *lease* that
@@ -153,11 +236,14 @@ A lease is a small file in a shared state directory outside every checkout. It r
   whatever its flag says
 - a random `token`, so only the holder can release its own lease
 
-Leases are released on normal exit and on signals. A holder that dies without releasing
-leaves a file whose pid is dead; the next check ignores it and cleans it up. There is no
-manual cleanup in the normal case, and a `--force` for the abnormal one. An unreadable
-lease file is treated as a live, non-interruptible reader (fail closed), because files are
-written atomically and a file that still will not parse is corruption, not a partial read.
+In the reference implementation, `run`, `withLease`, and `acquire --hold` release on
+normal completion and on `SIGINT` / `SIGTERM`. A holder that dies without releasing
+leaves a file. The next `acquire` or `reclaim` removes it only when this host can prove
+that process is dead. There is no `--force` flag. `release ID --token TOKEN` is the
+explicit recovery path for a record you can still name, including one whose liveness is
+unknown. An unreadable or unknown-version lease file is kept and blocks acquisition
+(fail closed). A file that disappears between listing and reading is treated as gone,
+not as corruption. `expectedUntil` is never read as permission to take the resource.
 
 ### The request, and the three answers
 
@@ -192,13 +278,16 @@ The modifier then:
   holders, their purposes and the earliest time it could proceed, so the calling agent can
   choose to wait, do something else, or escalate to a human.
 
-A request belongs to its live poster: it is removed when the poster exits or withdraws it,
-so the status view never fills with questions nobody is asking. That ownership covers every
-copy: when a modifier of a shared root posts its request into each dependent tool that has a
-reader, it removes or marks every one of those copies on every exit path, not just the copy
-in its own tool, or a reader's status shows an open question about work that already
-finished. Replies live in the
-reader's own lease file, keyed by request id, so each file has one writer.
+The design says a request belongs to its live poster and is removed when the poster
+exits or withdraws it, so the status view never fills with questions nobody is asking.
+The reference code keeps each request until `withdraw` is called with its id and token,
+including after the poster has exited and after a later acquire succeeds. Requests are
+durable proposals, not a queue. In the design, ownership also covers every copy: when a
+modifier of a shared root posts its request into each dependent tool that has a reader,
+it removes or marks every one of those copies on every exit path, so a reader's status
+does not keep showing a question about work that already finished. Replies would live in
+the reader's own lease file, keyed by request id, so each file has one writer. The
+reference code does not store replies.
 
 ### Modifiers queue
 
@@ -278,7 +367,7 @@ defined as five interfaces, each with at least one implementation:
 | Interface | Responsibility | Reference implementation |
 | --- | --- | --- |
 | `StateStore` | Where leases, requests, state and the graph live | A directory of JSON files under the OS state dir, outside every checkout |
-| `Liveness` | Is this holder still alive | `kill(pid, 0)`; a `host` field with clock-based expiry for foreign hosts |
+| `Liveness` | Is this holder still alive | Linux process identity (`kill(pid, 0)`, start time, boot id, machine id, PID namespace). Unknown means still held. Foreign-host expiry is not implemented |
 | `ToolAdapter` | Declares a tool's dependencies, actions (reader or modifier), and estimates | One per tool |
 | `Probe` | Returns two sorted lists (what the checkout expects, what the resource holds) or unknown | The migrations directory versus the resource's applied list |
 | `Notifier` | How a reader learns about a request | The status command; a desktop banner; an agent harness's cross-session messaging; an MCP notification; an A2A task message |
@@ -332,6 +421,7 @@ machine-global state directory shared by checkouts of different ages.
 
 ## Decisions taken so far
 
+These are design decisions. They are not a checklist of what version 0.2.0 implements.
 Recorded from the founder reviews of 2026-08-30. The reviewed design is in
 [docs/design-review-2026-08-30.html](docs/design-review-2026-08-30.html) (the original
 two-scope version, written for the local-database case) and the review of the first
@@ -392,14 +482,46 @@ Decisions 15 to 21 were added after building and reviewing the first implementat
 
 ## Status
 
-**First implementation built and reviewed**, as the test bed, in a Node/TypeScript project
-with a local Supabase shared by coding agents in git worktrees (three tools: the container
-runtime, the project's stack, the project's database). Its HLD and LLD were reviewed on
-2026-08-30, the build was reviewed twice against the LLD with every finding fixed and
-proven in real processes, and the lessons only the build surfaced are folded into this
-README as decisions 15 to 21. Its generic core (leases, requests, graph, FIFO queue,
-preflight, injected messages) is the candidate reference implementation for this
-repository.
+**Historical implementation.** A Node/TypeScript project with a local Supabase shared by
+coding agents in git worktrees (container runtime, project stack, project database) was
+the test bed that produced this pattern. Its HLD and LLD were reviewed on 2026-08-30.
+That codebase is not this repository. This repository's runnable code is the reference
+package described above: one flat resource, one Linux host, no graph, no queue, and no
+consent replies.
+
+**Reference package 0.2.0** is the hardened local coordinator. It is the version that
+should be read as the implementation. Format version is 2.
+
+Breaking changes from 0.1.0:
+
+- On-disk `formatVersion` is 2. Older or invalid holder files block acquisition and are
+  not deleted. Remove them by hand after inspection, or `release` a still-valid record
+  with its token.
+- `status` and `listLeases` no longer include lease or request tokens. `acquire` still
+  returns the lease token to the caller. A refusal still returns the new request token
+  to the caller that needs to withdraw it.
+- `withdrawRequest(id, token)` and `release(id, token)` require the token. The CLI flags
+  are `--token`.
+- `setResourceState` requires a live write lease (`leaseId` and `token`). Demo setup uses
+  `seedResourceState` / `resource seed`, which does not check leases.
+- `listLeases()` defaults to `{ clean: false }`. Dead holders are removed by `acquire`,
+  `reclaim`, and `listLeases({ clean: true })`, not by `status`.
+- The CLI rejects unknown options and missing option values. `--wait` is rejected because
+  it is not implemented. `preflight` stays a report (exit 0) unless `--strict` is set,
+  in which case any outcome other than `match` exits 2.
+- New state directories are mode `0700` and new records are mode `0600`. `init` also
+  tightens an existing state directory to `0700`. The state path must not be a symlink.
+- `FORMAT_VERSION` is 2. Package version is 0.2.0.
+- A custom `isAlive` still receives the pid as its first argument and may return `true`,
+  `false`, `"alive"`, `"dead"`, or `"unknown"`. `false` means positively dead. When
+  `isAlive` is omitted, the Linux process-identity rules are used instead of pid-only
+  `kill`.
+
+Durability is best-effort on a local POSIX filesystem: each record is written to a
+temporary file, fsynced, and renamed into place. There is no directory fsync and no
+promise about power loss or network filesystems. A crash can leave a `*.tmp` file; it
+is not treated as a holder. The store lock is reclaimed when its owner is positively
+dead, or when it never published an identity and is older than the publish grace.
 
 Open questions, in the order they need answering:
 

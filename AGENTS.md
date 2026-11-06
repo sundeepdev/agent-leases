@@ -1,6 +1,9 @@
 # agent-leases agent memory
 
-- Start with `README.md` for the project overview and usage details.
+- Start with `README.md`. The "What this package does" table is the contract for this repo. Later sections describe the design, including behavior that is not implemented.
+- `expectedUntil` is an estimate. Do not expire or override a live holder because it passed. Silence is not consent.
+- Unreadable, unknown-version, or invalid holder records block acquisition and are kept. Only proven local death may remove a holder.
+- The store is one Linux host and one PID namespace. A flat resource string is not a dependency graph.
 
 ## Maintaining this file
 

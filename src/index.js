@@ -3,4 +3,5 @@ export {
   REFUSED_EXIT_CODE,
   LeaseStore,
   LeaseUnavailable,
+  LeaseUncertain,
 } from "./leases.js";
