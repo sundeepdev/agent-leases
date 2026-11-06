@@ -1,7 +1,7 @@
 {
   "name": "agent-leases",
-  "version": "0.1.0",
-  "description": "A small, runnable reference implementation of leases for shared resources",
+  "version": "0.2.0",
+  "description": "Local cooperative leases so agents can share one resource without surprising each other",
   "type": "module",
   "bin": {
     "agent-leases": "src/cli.js"
@@ -9,9 +9,22 @@
   "exports": {
     ".": "./src/index.js"
   },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sundeepdev/agent-leases.git"
+  },
+  "homepage": "https://github.com/sundeepdev/agent-leases#readme",
+  "bugs": {
+    "url": "https://github.com/sundeepdev/agent-leases/issues"
+  },
   "scripts": {
     "lease": "node src/cli.js",
-    "test": "node --test",
+    "test": "node --test --test-timeout=120000 test/*.test.js",
     "demo": "node src/cli.js status"
   },
   "engines": {
