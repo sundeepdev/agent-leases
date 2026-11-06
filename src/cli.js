@@ -385,5 +385,6 @@ work. resource seed is an unguarded demo fixture. resource set requires
 --lease and --token for a live write lease.
 
 Set AGENT_LEASES_STATE_DIR, or pass --state-dir, before using a shared store.
-The store is local to one Linux host and one PID namespace.`);
+The store is local to one Linux or macOS host. Linux records a PID namespace;
+macOS does not.`);
 }

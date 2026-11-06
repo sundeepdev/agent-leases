@@ -100,10 +100,7 @@ export class LeaseStore {
     this.lockWaitMs = lockWaitMs;
     this.lockPublishGraceMs = lockPublishGraceMs;
     this.testHooks = testHooks;
-    this.#lastLockState = "alive";
   }
-
-  #lastLockState;
 
   async init() {
     const existing = await fs.lstat(this.stateDir).catch((error) => {
@@ -195,20 +192,19 @@ export class LeaseStore {
       }
       const readers = relevant.filter((record) => record.lease.kind === "read");
       if (kind === "write" && readers.length > 0) {
-        const request = {
-          formatVersion: FORMAT_VERSION,
-          id: randomUUID(),
-          token: randomUUID(),
+        const request = await this.#reuseOrCreateRequest({
           resource,
           operation,
           urgency,
           message: message || `Requesting permission to ${operation}`,
-          requestedBy: { pid, where, purpose },
-          requestedAt: this.now(),
-        };
-        await this.#writeJson(recordPath(this.requestsDir, request.id), request);
+          pid,
+          where,
+          purpose,
+          startId: identity.startId,
+          platform: identity.platform,
+        });
         throw new LeaseUnavailable(
-          `resource ${resource} has ${readers.length} active reader(s); request ${request.id} was posted`,
+          `resource ${resource} has ${readers.length} active reader(s); request ${request.id}`,
           {
             reason: "readers-active",
             holders: readers.map(publicLease),
@@ -602,6 +598,35 @@ export class LeaseStore {
     return decideLiveness(lease.identity, localIdentity(), probeProcess(lease.identity?.pid));
   }
 
+  async #reuseOrCreateRequest({ resource, operation, urgency, message, pid, where, purpose, startId, platform }) {
+    const records = await this.#readRequestFiles();
+    const existing = records.find((record) => {
+      if (record.uncertain || !record.request) return false;
+      const request = record.request;
+      const requester = request.requestedBy || {};
+      return request.resource === resource
+        && request.operation === operation
+        && requester.pid === pid
+        && requester.startId === startId
+        && requester.purpose === purpose
+        && requester.where === where;
+    });
+    if (existing) return existing.request;
+    const request = {
+      formatVersion: FORMAT_VERSION,
+      id: randomUUID(),
+      token: randomUUID(),
+      resource,
+      operation,
+      urgency,
+      message,
+      requestedBy: { pid, where, purpose, platform, startId },
+      requestedAt: this.now(),
+    };
+    await this.#writeJson(recordPath(this.requestsDir, request.id), request);
+    return request;
+  }
+
   async #withLock(fn) {
     await this.init();
     const owner = { ...currentProcessIdentity(), token: randomUUID() };
@@ -610,6 +635,8 @@ export class LeaseStore {
     }
     const lockPath = path.join(this.stateDir, "lock");
     const started = Date.now();
+    // Observations belong to this wait only. A previous uncertain timeout must not leak.
+    let observed = null;
     let held = false;
     while (!held) {
       try {
@@ -617,10 +644,11 @@ export class LeaseStore {
         held = true;
       } catch (error) {
         if (error.code !== "EEXIST") throw error;
-        const recovered = await this.#recoverLock(lockPath);
-        if (recovered) continue;
+        const outcome = await this.#recoverLock(lockPath);
+        if (outcome.recovered) continue;
+        observed = outcome.state;
         if (Date.now() - started > this.lockWaitMs) {
-          if (this.#lastLockState === "unknown") {
+          if (observed === "unknown") {
             throw new LeaseUncertain("lease store lock holder cannot be confirmed; refusing to continue", {
               reason: "lock-uncertain",
             });
@@ -633,53 +661,87 @@ export class LeaseStore {
     try {
       return await fn();
     } finally {
+      await this.#releaseLock(lockPath, owner.token);
+    }
+  }
+
+  async #releaseLock(lockPath, token) {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
       try {
         const current = JSON.parse(await fs.readFile(lockPath, "utf8"));
-        if (current.token === owner.token) await fs.unlink(lockPath);
+        if (current.token === token) await fs.unlink(lockPath);
+        return;
       } catch (error) {
-        if (error.code !== "ENOENT" && error.name === "SyntaxError") {
-          // A torn lock record is recovered by the next holder after the publish grace.
-        }
+        if (error.code !== "ENOENT") return;
+        await delay(5);
       }
     }
   }
 
   async #recoverLock(lockPath) {
-    let text;
+    let buffer;
     try {
-      text = await fs.readFile(lockPath, "utf8");
+      buffer = await fs.readFile(lockPath);
     } catch (error) {
-      if (error.code === "ENOENT") return true;
-      this.#lastLockState = "unknown";
-      return false;
+      if (error.code === "ENOENT") return { recovered: true, state: "absent" };
+      return { recovered: false, state: "unknown" };
     }
-    const stat = await fs.stat(lockPath).catch(() => null);
-    const age = stat ? Date.now() - stat.mtimeMs : 0;
     let owner = null;
     try {
-      owner = JSON.parse(text);
+      owner = JSON.parse(buffer.toString("utf8"));
     } catch {
       owner = null;
     }
-    if (!owner || typeof owner.token !== "string" || !validateIdentity(owner, owner.pid)) {
-      if (age >= this.lockPublishGraceMs) {
-        await fs.unlink(lockPath).catch((error) => {
-          if (error.code !== "ENOENT") throw error;
-        });
-        return true;
-      }
-      this.#lastLockState = "unknown";
-      return false;
+    const stat = await fs.stat(lockPath).catch(() => null);
+    if (!stat) return { recovered: true, state: "absent" };
+    const age = Date.now() - stat.mtimeMs;
+    const invalid = !owner || typeof owner.token !== "string" || !validateIdentity(owner, owner.pid);
+    if (invalid) {
+      if (age < this.lockPublishGraceMs) return { recovered: false, state: "unknown" };
+    } else {
+      const liveness = decideLiveness(owner, localIdentity(), probeProcess(owner.pid));
+      if (liveness !== "dead") return { recovered: false, state: liveness === "unknown" ? "unknown" : "alive" };
     }
-    const liveness = decideLiveness(owner, localIdentity(), probeProcess(owner.pid));
-    if (liveness === "dead") {
-      await fs.unlink(lockPath).catch((error) => {
+    const taken = await this.#takeStaleLock(lockPath, buffer);
+    if (taken === "taken" || taken === "gone") return { recovered: true, state: "absent" };
+    return { recovered: false, state: "alive" };
+  }
+
+  async #takeStaleLock(lockPath, expected) {
+    const claimPath = `${lockPath}.${process.pid}.${randomUUID()}.claim`;
+    try {
+      await fs.rename(lockPath, claimPath);
+    } catch (error) {
+      if (error.code === "ENOENT") return "gone";
+      throw error;
+    }
+    let moved;
+    try {
+      moved = await fs.readFile(claimPath);
+    } catch (error) {
+      if (error.code !== "ENOENT") await this.#restoreClaim(claimPath, lockPath);
+      return "gone";
+    }
+    if (Buffer.compare(moved, expected) === 0) {
+      await fs.unlink(claimPath).catch((error) => {
         if (error.code !== "ENOENT") throw error;
       });
-      return true;
+      return "taken";
     }
-    this.#lastLockState = liveness === "unknown" ? "unknown" : "alive";
-    return false;
+    await this.#restoreClaim(claimPath, lockPath);
+    return "restored";
+  }
+
+  async #restoreClaim(claimPath, lockPath) {
+    try {
+      await fs.link(claimPath, lockPath);
+    } catch (error) {
+      if (error.code === "EEXIST" || error.code === "ENOENT") return;
+      throw error;
+    }
+    await fs.unlink(claimPath).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+    });
   }
 
   async #writeJson(filename, value) {

@@ -131,7 +131,7 @@ test("process identity distinguishes reboot, reuse, and foreign hosts", async ()
     const filename = path.join(store.leasesDir, `${lease.id}.json`);
     const original = JSON.parse(await readFile(filename, "utf8"));
 
-    original.identity.startTicks += 1;
+    original.identity.startId = `${original.identity.startId}-reused`;
     await writeFile(filename, JSON.stringify(original));
     const afterReuse = await store.acquire({ kind: "write", purpose: "reused", resource });
     await assert.rejects(() => readFile(filename, "utf8"), (error) => error.code === "ENOENT");
@@ -149,17 +149,19 @@ test("process identity distinguishes reboot, reuse, and foreign hosts", async ()
     assert.equal(await readFile(foreignFile, "utf8").then(() => true), true);
     assert.equal(await store.release(foreign.id, foreign.token), true);
 
-    const namespaced = await store.acquire({ kind: "read", purpose: "namespace", resource });
-    const namespaceFile = path.join(store.leasesDir, `${namespaced.id}.json`);
-    const namespaceBody = JSON.parse(await readFile(namespaceFile, "utf8"));
-    namespaceBody.identity.pidNamespace = namespaceBody.identity.pidNamespace === "pid:[1]" ? "pid:[2]" : "pid:[1]";
-    await writeFile(namespaceFile, JSON.stringify(namespaceBody));
-    await assert.rejects(
-      () => store.acquire({ kind: "write", purpose: "intruder", resource }),
-      (error) => error instanceof LeaseUnavailable,
-    );
-    assert.equal(await readFile(namespaceFile, "utf8").then(() => true), true);
-    assert.equal(await store.release(namespaced.id, namespaced.token), true);
+    if (process.platform === "linux") {
+      const namespaced = await store.acquire({ kind: "read", purpose: "namespace", resource });
+      const namespaceFile = path.join(store.leasesDir, `${namespaced.id}.json`);
+      const namespaceBody = JSON.parse(await readFile(namespaceFile, "utf8"));
+      namespaceBody.identity.pidNamespace = namespaceBody.identity.pidNamespace === "pid:[1]" ? "pid:[2]" : "pid:[1]";
+      await writeFile(namespaceFile, JSON.stringify(namespaceBody));
+      await assert.rejects(
+        () => store.acquire({ kind: "write", purpose: "intruder", resource }),
+        (error) => error instanceof LeaseUnavailable,
+      );
+      assert.equal(await readFile(namespaceFile, "utf8").then(() => true), true);
+      assert.equal(await store.release(namespaced.id, namespaced.token), true);
+    }
 
     const rebooted = await store.acquire({ kind: "read", purpose: "reboot", resource });
     const rebootFile = path.join(store.leasesDir, `${rebooted.id}.json`);
@@ -361,6 +363,69 @@ test("a symlinked state directory is refused", async () => {
   } finally {
     await rm(link, { force: true });
     await rm(real, { recursive: true, force: true });
+  }
+});
+
+test("a repeated write refusal reuses the same request", async () => {
+  const store = await tempStore();
+  try {
+    const reader = await store.acquire({ kind: "read", purpose: "suite", resource });
+    const attempt = () => store.acquire({
+      kind: "write",
+      purpose: "migrate",
+      resource,
+      operation: "apply change",
+    });
+    let first;
+    let second;
+    await assert.rejects(attempt, (error) => {
+      first = error.request;
+      return error instanceof LeaseUnavailable;
+    });
+    await assert.rejects(attempt, (error) => {
+      second = error.request;
+      return error instanceof LeaseUnavailable;
+    });
+    assert.equal(second.id, first.id);
+    assert.equal(second.token, first.token);
+    assert.equal((await store.listRequests()).length, 1);
+
+    const [left, right] = await Promise.allSettled([attempt(), attempt()]);
+    assert.equal(left.status, "rejected");
+    assert.equal(right.status, "rejected");
+    assert.equal(left.reason.request.id, first.id);
+    assert.equal(right.reason.request.id, first.id);
+    assert.equal((await store.listRequests()).length, 1);
+
+    await assert.rejects(
+      () => store.acquire({ kind: "write", purpose: "migrate", resource, operation: "other change" }),
+      (error) => error instanceof LeaseUnavailable && error.request.id !== first.id,
+    );
+    assert.equal((await store.listRequests()).length, 2);
+    await store.release(reader.id, reader.token);
+  } finally {
+    await removeStore(store);
+  }
+});
+
+test("a later lock timeout does not reuse an earlier uncertain result", async () => {
+  const store = await tempStore({ lockWaitMs: 180, lockPublishGraceMs: 60_000 });
+  try {
+    await store.init();
+    const lockPath = path.join(store.stateDir, "lock");
+    await writeFile(lockPath, "");
+    await assert.rejects(
+      () => store.acquire({ kind: "read", purpose: "first", resource }),
+      (error) => error instanceof LeaseUncertain && error.reason === "lock-uncertain",
+    );
+    const live = { ...currentProcessIdentity(), token: "66666666-6666-4666-8666-666666666666" };
+    await writeFile(lockPath, JSON.stringify(live));
+    await assert.rejects(
+      () => store.acquire({ kind: "read", purpose: "second", resource }),
+      (error) => error instanceof LeaseUnavailable && error.reason === "lock-timeout",
+    );
+  } finally {
+    await removeStore(store);
   }
 });
 

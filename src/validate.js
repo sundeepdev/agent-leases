@@ -43,10 +43,15 @@ export function tokensMatch(left, right) {
 export function validateIdentity(identity, pid) {
   if (!identity || typeof identity !== "object" || Array.isArray(identity)) return false;
   if (identity.pid !== pid || !Number.isInteger(pid) || pid <= 0) return false;
+  if (identity.platform !== "linux" && identity.platform !== "darwin") return false;
   if (!isCleanString(identity.machineId, 128)) return false;
-  if (!isCleanString(identity.bootId, 128)) return false;
-  if (typeof identity.pidNamespace !== "string" || !PID_NAMESPACE.test(identity.pidNamespace)) return false;
-  if (!Number.isInteger(identity.startTicks) || identity.startTicks < 0) return false;
+  if (!isCleanString(identity.bootId, 256)) return false;
+  if (!isCleanString(identity.startId, 128)) return false;
+  if (identity.platform === "linux") {
+    if (typeof identity.pidNamespace !== "string" || !PID_NAMESPACE.test(identity.pidNamespace)) return false;
+  } else if (identity.pidNamespace != null) {
+    return false;
+  }
   return true;
 }
 

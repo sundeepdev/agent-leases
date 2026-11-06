@@ -18,10 +18,11 @@ reference implementation so the lease flow can be run locally. See [Status](#sta
 ## What this package does
 
 Version 0.2.0 coordinates cooperating processes that share one flat resource name on
-**one Linux host and one PID namespace**. It is coordination, not access control:
-anyone who can rewrite the state directory can ignore it. The supported store is a
-local POSIX directory (the CI target is Ubuntu). Network filesystems and Windows are
-not a supported store.
+**one Linux or macOS host**. It is coordination, not access control: anyone who can
+rewrite the state directory can ignore it. The supported store is a local POSIX
+directory. CI runs the suite on Ubuntu and macOS. Network filesystems and Windows are
+not a supported store. Linux records a PID namespace; macOS has none, so a namespace
+mismatch is a Linux check only.
 
 Readers of the same resource can hold leases together. A writer acquires only when
 that resource has no live reader and no other writer. Check and claim are one
@@ -35,16 +36,17 @@ file names a resource, that resource is blocked. If the resource cannot be read,
 whole store is blocked. The file is kept. A holder is removed only when this same
 machine and boot can prove that process is dead, and only from `acquire`, `reclaim`,
 or `listLeases({ clean: true })`. `status` does not delete records. Unknown liveness
-(a foreign machine, another PID namespace, an invalid pid, or an unexpected probe
-error) stays in force and blocks a conflicting acquire.
+(a foreign machine, another PID namespace on Linux, an invalid pid, or a failed
+probe) stays in force and blocks a conflicting acquire. A failed probe is never
+treated as death.
 
 | Capability | In this package |
 | --- | --- |
 | Read leases coexist; one writer excludes other writers and readers of the same resource | Implemented |
-| Atomic check-and-claim on one host | Implemented, via an exclusive store lock with stale-lock recovery |
+| Atomic check-and-claim on one host | Implemented. The store lock is taken over by renaming a stale file and checking that the moved bytes are the ones judged dead |
 | `expectedUntil` is an estimate and never expires a live holder | Implemented |
 | Fail closed on unreadable, unknown-version, or invalid holder records | Implemented |
-| Process identity: pid, start time, boot id, machine id, PID namespace | Implemented on Linux `/proc` and `/etc/machine-id` |
+| Process identity: pid, start time, boot id, machine id, platform | Linux uses `/proc` and `/etc/machine-id`, plus a PID namespace. macOS uses `IOPlatformUUID`, `kern.boottime`, and `ps -o lstart=` |
 | `withLease` and `run` hold the lease for the whole operation | Implemented |
 | Private state directory (`0700`) and record files (`0600`); tokens omitted from `status` | Implemented |
 | Dependency graph across resource names | Design only. Different names do not conflict |
@@ -136,6 +138,10 @@ await store.withLease(
   },
 );
 ```
+
+On a Mac (or Linux), `sh scripts/mac-smoke.sh` acquires, releases, refuses a second
+writer while `acquire --hold` and `run` are in progress, and checks that killing the
+holder lets the next acquire through. It prints `PASS` or `FAIL` for each step.
 
 ## The problem
 
@@ -367,7 +373,7 @@ defined as five interfaces, each with at least one implementation:
 | Interface | Responsibility | Reference implementation |
 | --- | --- | --- |
 | `StateStore` | Where leases, requests, state and the graph live | A directory of JSON files under the OS state dir, outside every checkout |
-| `Liveness` | Is this holder still alive | Linux process identity (`kill(pid, 0)`, start time, boot id, machine id, PID namespace). Unknown means still held. Foreign-host expiry is not implemented |
+| `Liveness` | Is this holder still alive | Linux or macOS process identity (`kill(pid, 0)`, start time, boot id, machine id). Linux also records a PID namespace. Unknown means still held. Foreign-host expiry is not implemented |
 | `ToolAdapter` | Declares a tool's dependencies, actions (reader or modifier), and estimates | One per tool |
 | `Probe` | Returns two sorted lists (what the checkout expects, what the resource holds) or unknown | The migrations directory versus the resource's applied list |
 | `Notifier` | How a reader learns about a request | The status command; a desktop banner; an agent harness's cross-session messaging; an MCP notification; an A2A task message |
@@ -486,8 +492,8 @@ Decisions 15 to 21 were added after building and reviewing the first implementat
 coding agents in git worktrees (container runtime, project stack, project database) was
 the test bed that produced this pattern. Its HLD and LLD were reviewed on 2026-08-30.
 That codebase is not this repository. This repository's runnable code is the reference
-package described above: one flat resource, one Linux host, no graph, no queue, and no
-consent replies.
+package described above: one flat resource, one Linux or macOS host, no graph, no
+queue, and no consent replies.
 
 **Reference package 0.2.0** is the hardened local coordinator. It is the version that
 should be read as the implementation. Format version is 2.
@@ -514,8 +520,11 @@ Breaking changes from 0.1.0:
 - `FORMAT_VERSION` is 2. Package version is 0.2.0.
 - A custom `isAlive` still receives the pid as its first argument and may return `true`,
   `false`, `"alive"`, `"dead"`, or `"unknown"`. `false` means positively dead. When
-  `isAlive` is omitted, the Linux process-identity rules are used instead of pid-only
+  `isAlive` is omitted, Linux or macOS process identity is used instead of pid-only
   `kill`.
+- The supported host is one Linux or macOS machine. Identity records include
+  `platform` and `startId`. Linux records a PID namespace; macOS leaves that field
+  empty. A probe that fails is unknown, not dead.
 
 Durability is best-effort on a local POSIX filesystem: each record is written to a
 temporary file, fsynced, and renamed into place. There is no directory fsync and no

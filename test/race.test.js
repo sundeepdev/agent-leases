@@ -9,6 +9,7 @@ import { LeaseStore } from "../src/leases.js";
 import { testEnv } from "../support/helpers.js";
 
 const helper = fileURLToPath(new URL("../support/spawn-acquire.js", import.meta.url));
+const holdLock = fileURLToPath(new URL("../support/hold-lock.js", import.meta.url));
 const resource = "demo-resource";
 
 async function newStore() {
@@ -85,6 +86,65 @@ async function runProcessPairs({ kinds, trials, noise }) {
     }
   }
 }
+
+test("killing the lock holder lets only one waiter acquire", { timeout: 60_000 }, async () => {
+  // On the unlink-based recovery, 12 trials with 6 waiters granted two or three
+  // write leases in 2 trials. Renaming the stale lock and putting back a live
+  // one must keep that at exactly one grant.
+  const trials = 6;
+  const waiters = 4;
+  for (let trial = 0; trial < trials; trial += 1) {
+    const store = await newStore();
+    const children = [];
+    let holder;
+    try {
+      await store.init();
+      const readyFile = path.join(store.stateDir, "holder-ready");
+      const goFile = path.join(store.stateDir, "go");
+      holder = spawn(process.execPath, [holdLock, store.stateDir, readyFile], {
+        stdio: "ignore",
+        env: testEnv(),
+      });
+      const readyDeadline = Date.now() + 5_000;
+      while (Date.now() < readyDeadline) {
+        try {
+          await readFile(readyFile);
+          break;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      }
+      await writeFile(goFile, "go");
+      const pending = [];
+      for (let index = 0; index < waiters; index += 1) {
+        const launched = launch(store.stateDir, "write", `W${trial}-${index}`, goFile);
+        pending.push(launched);
+        children.push(launched.child);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      holder.kill("SIGKILL");
+      const results = await Promise.all(pending.map((entry) => entry.result));
+      const granted = results.filter((result) => result.ok);
+      assert.equal(
+        granted.length,
+        1,
+        `trial ${trial} granted ${granted.length}: ${JSON.stringify(results)}`,
+      );
+    } finally {
+      if (holder) {
+        try { holder.kill("SIGKILL"); } catch { /* already exited */ }
+      }
+      for (const child of children) {
+        try { child.kill("SIGKILL"); } catch { /* already exited */ }
+      }
+      await Promise.all(children.map((child) => {
+        if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+        return new Promise((resolve) => child.once("exit", resolve));
+      }));
+      await rm(store.stateDir, { recursive: true, force: true });
+    }
+  }
+});
 
 function launch(stateDir, kind, purpose, goFile) {
   const resultFile = path.join(stateDir, `result-${purpose}.json`);
