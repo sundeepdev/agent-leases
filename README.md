@@ -26,7 +26,9 @@ mismatch is a Linux check only.
 
 Readers of the same resource can hold leases together. A writer acquires only when
 that resource has no live reader and no other writer. Check and claim are one
-locked step, so two conflicting callers cannot both be granted. `expectedUntil` is a
+locked step, so two conflicting callers cannot both be granted. A writer that is
+refused again for the same resource and operation gets the request already posted
+by that same process, instead of a new file on every try. `expectedUntil` is a
 planning estimate. It is not a TTL. A live holder is never removed or overridden
 because the estimate has passed, and silence is never consent. `interruptible` and
 `importance` are stored for people to read; they do not authorize a writer.
